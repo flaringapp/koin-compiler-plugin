@@ -80,6 +80,7 @@ tasks.test {
     // Enable test data overwriting when running with -Pupdate.testdata=true
     if (project.hasProperty("update.testdata")) {
         systemProperty("overwrite.output", "true")
+        systemProperty("update.testdata", "true")
         environment("OVERWRITE_EXPECTED_OUTPUT", "true")
     }
 }

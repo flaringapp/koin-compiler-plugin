@@ -17,6 +17,7 @@ import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.koin.compiler.plugin.KoinAnnotationFqNames
+import org.koin.compiler.plugin.KoinDiagnostic
 import org.koin.compiler.plugin.KoinPluginLogger
 
 /**
@@ -538,16 +539,13 @@ class DefinitionCallBuilder(
      * artifact.
      */
     private fun reportMissingDslArtifact(definitionType: DefinitionType, skippedTarget: String) {
-        val (annotation, dslFunction, artifact) = when (definitionType) {
-            DefinitionType.VIEW_MODEL -> Triple("@KoinViewModel", "buildViewModel", "io.insert-koin:koin-core-viewmodel")
-            DefinitionType.WORKER -> Triple("@KoinWorker", "buildWorker", "io.insert-koin:koin-android-workmanager")
+        val diagnostic = when (definitionType) {
+            DefinitionType.VIEW_MODEL -> KoinDiagnostic.MissingViewModelArtifact(def = skippedTarget)
+            DefinitionType.WORKER -> KoinDiagnostic.MissingWorkerArtifact(def = skippedTarget)
             else -> return
         }
         if (!reportedMissingArtifacts.add(definitionType)) return
-        KoinPluginLogger.error(
-            "$annotation definition '$skippedTarget' cannot be generated: '$dslFunction' is not on classpath. " +
-                "Add dependency: $artifact"
-        )
+        KoinPluginLogger.report(diagnostic)
     }
 
     fun findDefinitionWithKClass(functionName: Name, packageName: String, receiverClassName: String): IrSimpleFunction? {

@@ -20,6 +20,7 @@ import org.jetbrains.kotlin.ir.types.classifierOrNull
 import org.jetbrains.kotlin.ir.util.*
 import org.jetbrains.kotlin.name.CallableId
 import org.jetbrains.kotlin.name.Name
+import org.koin.compiler.plugin.KoinDiagnostic
 import org.koin.compiler.plugin.KoinPluginConstants
 import org.koin.compiler.plugin.KoinPluginLogger
 import org.koin.compiler.plugin.ProvidedTypeRegistry
@@ -124,11 +125,11 @@ class CallSiteValidator(private val context: IrPluginContext) {
             }
 
             // Report error — either full graph available, or local type with local definitions
-            KoinPluginLogger.error(
-                "Missing definition: ${callSite.targetFqName}\n" +
-                "  resolved by: ${callSite.callFunctionName}<${callSite.targetClass.name}>()\n" +
-                "  No matching definition found in any declared module.\n" +
-                "  Check your declaration with Annotation or DSL.",
+            KoinPluginLogger.report(
+                KoinDiagnostic.MissingCallSite(
+                    type = callSite.targetFqName,
+                    callFn = callSite.callFunctionName,
+                ),
                 callSite.filePath, callSite.line, callSite.column
             )
         }
@@ -335,11 +336,8 @@ class CallSiteValidator(private val context: IrPluginContext) {
             } else 0
 
             // Report error with best-available location info
-            KoinPluginLogger.error(
-                "Missing definition: $targetFqName\n" +
-                "  Required by a call site in a dependency module (deferred validation).\n" +
-                "  No matching definition found in any declared module.\n" +
-                "  Check your declaration with Annotation or DSL.",
+            KoinPluginLogger.report(
+                KoinDiagnostic.MissingCallSiteDeferred(type = targetFqName),
                 hintFilePath, hintLine, hintColumn
             )
         }
@@ -458,9 +456,11 @@ class CallSiteValidator(private val context: IrPluginContext) {
         for ((moduleId, defs) in byModule) {
             val typeNames = defs.mapNotNull { it.returnTypeClass.fqNameWhenAvailable?.shortName()?.asString() }
             val shortModuleName = moduleId.substringAfterLast('.')
-            KoinPluginLogger.error(
-                "Module '$shortModuleName' is not loaded at startKoin — ${defs.size} definitions unreachable: ${typeNames.joinToString()}\n" +
-                "  Add it to modules() or includes() to make these definitions available"
+            KoinPluginLogger.report(
+                KoinDiagnostic.UnreachableModule(
+                    module = shortModuleName,
+                    types = typeNames,
+                )
             )
         }
     }

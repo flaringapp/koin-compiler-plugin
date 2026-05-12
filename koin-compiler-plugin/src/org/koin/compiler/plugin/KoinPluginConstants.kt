@@ -27,6 +27,18 @@ object KoinPluginConstants {
     /** Option to enable compile-time dependency safety checks. */
     const val OPTION_COMPILE_SAFETY = "compileSafety"
 
+    /** Option to append a single AI-assist CTA at the end of compilation if any Koin diagnostic fires. */
+    const val OPTION_AI_ASSIST = "aiAssist"
+
+    /**
+     * URL printed in the AI-assist CTA.
+     *
+     * Short redirect to the canonical doc page at https://doc.kotzilla.io/docs/fixIssues/koinMcp.
+     * Pinned by [org.koin.compiler.plugin.KoinDiagnosticTest] — changing this string is a public
+     * contract change and must be coordinated with the redirect on kotzilla.io.
+     */
+    const val AI_ASSIST_CTA_URL = "https://kotzilla.io/koin-mcp"
+
     // ================================================================================
     // Definition Types - Used for hint functions and logging
     // ================================================================================

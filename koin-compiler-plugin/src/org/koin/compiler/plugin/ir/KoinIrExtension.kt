@@ -108,6 +108,9 @@ class KoinIrExtension(
         moduleFragment.transform(monitorTransformer, null)
         monitorTransformer.logSummary()
 
+        // Final: emit one AI-assist CTA at the tail of the log if any Koin diagnostic fired.
+        KoinPluginLogger.flushAiAssistCta()
+
         KoinPluginLogger.debug { "IR Phase completed" }
     }
 }

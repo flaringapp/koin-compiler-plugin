@@ -7,6 +7,7 @@ import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
 import org.jetbrains.kotlin.ir.util.primaryConstructor
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
+import org.koin.compiler.plugin.KoinDiagnostic
 import org.koin.compiler.plugin.KoinPluginLogger
 import org.koin.compiler.plugin.ProvidedTypeRegistry
 import org.koin.compiler.plugin.PropertyValueRegistry
@@ -170,7 +171,13 @@ class BindingRegistry {
 
                     // Validate @Property/@PropertyValue matching inline (no second pass)
                     if (req.isProperty && req.propertyKey != null && !PropertyValueRegistry.hasDefault(req.propertyKey)) {
-                        KoinPluginLogger.warn("[Koin] Missing @PropertyValue default: \"${req.propertyKey}\" — no @PropertyValue(\"${req.propertyKey}\") found for $defName in module $moduleName. Property must be provided at runtime via properties().")
+                        KoinPluginLogger.report(
+                            KoinDiagnostic.MissingPropertyValue(
+                                key = req.propertyKey,
+                                def = defName,
+                                module = moduleName,
+                            )
+                        )
                     }
 
                     continue
@@ -273,39 +280,43 @@ class BindingRegistry {
     ) {
         val typeName = req.typeKey.render()
         val qualifierStr = when (val q = req.qualifier) {
-            is QualifierValue.StringQualifier -> " qualified with @Named(\"${q.name}\")"
-            is QualifierValue.TypeQualifier -> " qualified with @Qualifier(${q.irClass.name}::class)"
-            null -> ""
+            is QualifierValue.StringQualifier -> "@Named(\"${q.name}\")"
+            is QualifierValue.TypeQualifier -> "@Qualifier(${q.irClass.name}::class)"
+            null -> null
         }
 
-        val message = buildString {
-            append("Missing dependency: $typeName$qualifierStr")
-            append("\n  required by: $defName (parameter '${req.paramName}')")
-            append("\n  in module: $moduleName")
-
-            // Hint: find similar bindings (same type, different qualifier)
-            val similarBindings = providedTypes.filter { provider ->
-                val typeMatch = when {
-                    req.typeKey.fqName != null && provider.typeKey.fqName != null ->
-                        req.typeKey.fqName == provider.typeKey.fqName
-                    req.typeKey.classId != null && provider.typeKey.classId != null ->
-                        req.typeKey.classId == provider.typeKey.classId
-                    else -> false
-                }
-                typeMatch && !qualifiersMatch(req.qualifier, provider.qualifier)
+        // Hint: find similar bindings (same type, different qualifier)
+        val similarBindings = providedTypes.filter { provider ->
+            val typeMatch = when {
+                req.typeKey.fqName != null && provider.typeKey.fqName != null ->
+                    req.typeKey.fqName == provider.typeKey.fqName
+                req.typeKey.classId != null && provider.typeKey.classId != null ->
+                    req.typeKey.classId == provider.typeKey.classId
+                else -> false
             }
-            if (similarBindings.isNotEmpty()) {
-                append("\n  Hint: Found similar binding: $typeName")
-                val first = similarBindings.first()
-                when (val q = first.qualifier) {
+            typeMatch && !qualifiersMatch(req.qualifier, provider.qualifier)
+        }
+        val hint: String? = if (similarBindings.isNotEmpty()) {
+            buildString {
+                append("Found similar binding: $typeName")
+                when (val q = similarBindings.first().qualifier) {
                     is QualifierValue.StringQualifier -> append(" with qualifier @Named(\"${q.name}\")")
                     is QualifierValue.TypeQualifier -> append(" with qualifier @Qualifier(${q.irClass.name}::class)")
                     null -> append(" (no qualifier)")
                 }
             }
-        }
+        } else null
 
-        KoinPluginLogger.error(message)
+        KoinPluginLogger.report(
+            KoinDiagnostic.MissingBinding(
+                type = typeName,
+                qualifier = qualifierStr,
+                def = defName,
+                param = req.paramName,
+                module = moduleName,
+                hint = hint,
+            )
+        )
     }
 
     // ================================================================================

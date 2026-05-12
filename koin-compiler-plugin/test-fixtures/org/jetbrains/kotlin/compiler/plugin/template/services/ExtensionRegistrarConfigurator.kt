@@ -57,8 +57,10 @@ private class ExtensionRegistrarConfigurator(testServices: TestServices) : Envir
     ) {
         val rawCollector = configuration.get(CommonConfigurationKeys.MESSAGE_COLLECTOR_KEY, MessageCollector.NONE)
         val messageCollector = CapturingMessageCollector(rawCollector)
-        // Initialize the logger for tests (enable both user and debug logs)
-        KoinPluginLogger.init(messageCollector, userLogs = true, debugLogs = true, compileSafety = true)
+        // Initialize the logger for tests (enable both user and debug logs).
+        // Disable aiAssist so golden `.errors.txt` files exercise diagnostic content only,
+        // not the trailing CTA banner — the CTA has its own coverage in KoinDiagnosticTest.
+        KoinPluginLogger.init(messageCollector, userLogs = true, debugLogs = true, compileSafety = true, aiAssist = false)
         FirExtensionRegistrarAdapter.registerExtension(KoinPluginRegistrar())
         IrGenerationExtension.registerExtension(KoinIrExtension(lookupTracker = null, expectActualTracker = org.jetbrains.kotlin.incremental.components.ExpectActualTracker.DoNothing))
     }

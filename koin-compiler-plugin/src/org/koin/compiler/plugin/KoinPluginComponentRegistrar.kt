@@ -11,6 +11,7 @@ import org.jetbrains.kotlin.fir.extensions.FirExtensionRegistrarAdapter
 import org.jetbrains.kotlin.incremental.components.ExpectActualTracker
 import org.jetbrains.kotlin.incremental.components.LookupTracker
 import org.koin.compiler.plugin.ir.KoinIrExtension
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Centralized logger for the Koin compiler plugin.
@@ -51,22 +52,39 @@ object KoinPluginLogger {
     var compileSafetyEnabled: Boolean = true
         private set
 
+    @Volatile
+    var aiAssistEnabled: Boolean = false
+        private set
+
     /** LookupTracker from compiler configuration, for direct IC lookup recording. */
     @Volatile
     var lookupTracker: LookupTracker? = null
         private set
 
     /**
+     * Highest severity of any diagnostic reported via [report] during this compilation.
+     * Used by [flushAiAssistCta] to decide whether to emit a trailing CTA and at what severity.
+     * 0 = none, 1 = warning, 2 = error.
+     *
+     * AtomicInteger (not @Volatile Int) so concurrent `report()` calls cannot lose a
+     * higher-severity update via read-then-write — `updateAndGet` is the only correct
+     * primitive for a monotonic max accumulator.
+     */
+    private val highestDiagnosticSeverity: AtomicInteger = AtomicInteger(0)
+
+    /**
      * Initialize the logger with configuration from the compiler.
      */
-    fun init(collector: MessageCollector, userLogs: Boolean, debugLogs: Boolean, unsafeDslChecks: Boolean = true, skipDefaultValues: Boolean = true, compileSafety: Boolean = true, lookupTracker: LookupTracker? = null) {
+    fun init(collector: MessageCollector, userLogs: Boolean, debugLogs: Boolean, unsafeDslChecks: Boolean = true, skipDefaultValues: Boolean = true, compileSafety: Boolean = true, aiAssist: Boolean = true, lookupTracker: LookupTracker? = null) {
         messageCollector = collector
         userLogsEnabled = userLogs
         debugLogsEnabled = debugLogs
         unsafeDslChecksEnabled = unsafeDslChecks
         skipDefaultValuesEnabled = skipDefaultValues
         compileSafetyEnabled = compileSafety
+        aiAssistEnabled = aiAssist
         this.lookupTracker = lookupTracker
+        highestDiagnosticSeverity.set(0)
     }
 
     /**
@@ -149,6 +167,46 @@ object KoinPluginLogger {
         } else null
         messageCollector.report(CompilerMessageSeverity.ERROR, "[Koin] $message", location)
     }
+
+    /**
+     * Report a typed Koin diagnostic.
+     *
+     * Format: `[Koin][CODE] <message>`. The AI-assist CTA is emitted once at the tail
+     * of the compilation by [flushAiAssistCta], not per diagnostic.
+     */
+    fun report(diagnostic: KoinDiagnostic, filePath: String? = null, line: Int = -1, column: Int = -1) {
+        val body = "[Koin][${diagnostic.code}] ${diagnostic.message}"
+        val severity = when (diagnostic.severity) {
+            KoinDiagnostic.Severity.ERROR -> CompilerMessageSeverity.ERROR
+            KoinDiagnostic.Severity.WARNING -> CompilerMessageSeverity.WARNING
+        }
+        val severityRank = if (diagnostic.severity == KoinDiagnostic.Severity.ERROR) 2 else 1
+        highestDiagnosticSeverity.updateAndGet { current -> if (severityRank > current) severityRank else current }
+        val location = if (filePath != null && line >= 0) {
+            CompilerMessageLocation.create(filePath, line, column.coerceAtLeast(0), null)
+        } else null
+        messageCollector.report(severity, body, location)
+    }
+
+    /**
+     * Emit a single trailing CTA pointing developers to the Kotzilla MCP Server.
+     * No-op unless [aiAssistEnabled] is on and at least one diagnostic was reported
+     * during the current compilation. Emitted at the highest severity seen so it
+     * sorts with the other Koin messages in the build log.
+     *
+     * Called once per compilation by [org.koin.compiler.plugin.ir.KoinIrExtension] at
+     * the tail of IR processing.
+     */
+    fun flushAiAssistCta() {
+        val rank = highestDiagnosticSeverity.get()
+        if (!aiAssistEnabled || rank == 0) return
+        val severity = if (rank >= 2) CompilerMessageSeverity.ERROR else CompilerMessageSeverity.WARNING
+        messageCollector.report(
+            severity,
+            "[Koin] → Fix with AI: set up Kotzilla MCP at ${KoinPluginConstants.AI_ASSIST_CTA_URL}",
+        )
+        highestDiagnosticSeverity.set(0)
+    }
 }
 
 // Legacy alias for backward compatibility with FIR code
@@ -173,12 +231,13 @@ class KoinPluginComponentRegistrar: CompilerPluginRegistrar() {
         val unsafeDslChecks = configuration.get(KoinConfigurationKeys.UNSAFE_DSL_CHECKS, true)
         val skipDefaultValues = configuration.get(KoinConfigurationKeys.SKIP_DEFAULT_VALUES, true)
         val compileSafety = configuration.get(KoinConfigurationKeys.COMPILE_SAFETY, true)
+        val aiAssist = configuration.get(KoinConfigurationKeys.AI_ASSIST, true)
 
         // IC trackers for incremental compilation support
         val lookupTracker = configuration.get(CommonConfigurationKeys.LOOKUP_TRACKER)
 
         // Initialize the centralized logger (includes lookupTracker for FIR-level IC recording)
-        KoinPluginLogger.init(messageCollector, userLogs, debugLogs, unsafeDslChecks, skipDefaultValues, compileSafety, lookupTracker)
+        KoinPluginLogger.init(messageCollector, userLogs, debugLogs, unsafeDslChecks, skipDefaultValues, compileSafety, aiAssist, lookupTracker)
         val expectActualTracker = configuration.get(
             CommonConfigurationKeys.EXPECT_ACTUAL_TRACKER,
             ExpectActualTracker.DoNothing

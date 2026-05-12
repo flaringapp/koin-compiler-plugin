@@ -1,0 +1,207 @@
+package org.koin.compiler.plugin
+
+import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity
+import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSourceLocation
+import org.jetbrains.kotlin.cli.common.messages.MessageCollector
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.parallel.Isolated
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * Verifies the [KoinDiagnostic] catalog and the logger's CTA-append behavior.
+ *
+ * The KOIN-* codes are a public contract with the Kotzilla MCP Server classifier.
+ * Changing a code here is a breaking change and must be coordinated with the server.
+ *
+ * `@Isolated` because [KoinPluginLogger] is a singleton — tests must run sequentially so
+ * one test's `init` does not clobber another's recorder.
+ */
+@Isolated
+class KoinDiagnosticTest {
+
+    @AfterEach
+    fun restoreLoggerDefaults() {
+        // The KoinPluginLogger is a process-wide singleton. Restore defaults so a flaky
+        // test scheduler (Kotlin compiler test framework runs modules via ForkJoinPool)
+        // does not see our recorder or non-default flag state from a prior test.
+        KoinPluginLogger.init(
+            collector = MessageCollector.NONE,
+            userLogs = false,
+            debugLogs = false,
+            unsafeDslChecks = true,
+            skipDefaultValues = true,
+            compileSafety = true,
+            aiAssist = false,
+        )
+    }
+
+    private class Recorder : MessageCollector {
+        data class Report(val severity: CompilerMessageSeverity, val message: String, val location: CompilerMessageSourceLocation?)
+        val reports = mutableListOf<Report>()
+        override fun clear() = reports.clear()
+        override fun hasErrors(): Boolean = reports.any { it.severity == CompilerMessageSeverity.ERROR }
+        override fun report(severity: CompilerMessageSeverity, message: String, location: CompilerMessageSourceLocation?) {
+            reports += Report(severity, message, location)
+        }
+    }
+
+    @Test
+    fun `codes are stable`() {
+        assertEquals("KOIN-D001", KoinDiagnostic.MissingBinding("T", null, "D", "p", "M", null).code)
+        assertEquals("KOIN-D002", KoinDiagnostic.MissingCallSite("T", "get").code)
+        assertEquals("KOIN-D003", KoinDiagnostic.MissingCallSiteDeferred("T").code)
+        assertEquals("KOIN-W001", KoinDiagnostic.UnreachableModule("m", listOf("T")).code)
+        assertEquals("KOIN-A001", KoinDiagnostic.MissingViewModelArtifact("D").code)
+        assertEquals("KOIN-A002", KoinDiagnostic.MissingWorkerArtifact("D").code)
+        assertEquals("KOIN-A003", KoinDiagnostic.MissingCoreArtifact("M").code)
+        assertEquals("KOIN-S001", KoinDiagnostic.UnsafeDsl("T").code)
+        assertEquals("KOIN-P001", KoinDiagnostic.MissingPropertyValue("k", "D", "M").code)
+        assertEquals("KOIN-M001", KoinDiagnostic.MonitorNoSdk().code)
+    }
+
+    @Test
+    fun `severity is correct per code`() {
+        assertEquals(KoinDiagnostic.Severity.ERROR, KoinDiagnostic.MissingBinding("T", null, "D", "p", "M", null).severity)
+        assertEquals(KoinDiagnostic.Severity.ERROR, KoinDiagnostic.MissingCoreArtifact("M").severity)
+        assertEquals(KoinDiagnostic.Severity.ERROR, KoinDiagnostic.UnsafeDsl("T").severity)
+        assertEquals(KoinDiagnostic.Severity.WARNING, KoinDiagnostic.MissingPropertyValue("k", "D", "M").severity)
+        assertEquals(KoinDiagnostic.Severity.WARNING, KoinDiagnostic.MonitorNoSdk().severity)
+    }
+
+    @Test
+    fun `missing binding renders qualifier and hint`() {
+        val d = KoinDiagnostic.MissingBinding(
+            type = "com.example.Repository",
+            qualifier = "@Named(\"prod\")",
+            def = "Service",
+            param = "repo",
+            module = "appModule",
+            hint = "Found similar binding: Repository with qualifier @Named(\"test\")",
+        )
+        assertTrue("qualified with @Named(\"prod\")" in d.message)
+        assertTrue("required by: Service (parameter 'repo')" in d.message)
+        assertTrue("in module: appModule" in d.message)
+        assertTrue("Hint: Found similar binding" in d.message)
+    }
+
+    @Test
+    fun `missing binding without qualifier omits it`() {
+        val d = KoinDiagnostic.MissingBinding(
+            type = "Repository", qualifier = null, def = "Service", param = "repo", module = "M", hint = null,
+        )
+        assertFalse("qualified with" in d.message)
+        assertFalse("Hint:" in d.message)
+    }
+
+    @Test
+    fun `logger emits code prefix and respects severity`() {
+        val rec = Recorder()
+        KoinPluginLogger.init(rec, userLogs = false, debugLogs = false, aiAssist = false)
+        KoinPluginLogger.report(KoinDiagnostic.MissingBinding("T", null, "D", "p", "M", null))
+        KoinPluginLogger.report(KoinDiagnostic.MissingPropertyValue("k", "D", "M"))
+
+        assertEquals(2, rec.reports.size)
+        assertEquals(CompilerMessageSeverity.ERROR, rec.reports[0].severity)
+        assertTrue(rec.reports[0].message.startsWith("[Koin][KOIN-D001] Missing dependency:"))
+        assertEquals(CompilerMessageSeverity.WARNING, rec.reports[1].severity)
+        assertTrue(rec.reports[1].message.startsWith("[Koin][KOIN-P001] Missing @PropertyValue default:"))
+    }
+
+    @Test
+    fun `individual diagnostic message never contains CTA`() {
+        // The CTA is emitted once at the tail by flushAiAssistCta(), never on the
+        // diagnostic body itself — keep error messages clean and the CTA sticky.
+        val rec = Recorder()
+        KoinPluginLogger.init(rec, userLogs = false, debugLogs = false, aiAssist = true)
+        KoinPluginLogger.report(KoinDiagnostic.MissingBinding("T", null, "D", "p", "M", null))
+
+        val message = rec.reports.single().message
+        assertFalse("Fix with AI" in message, "CTA leaked into diagnostic body: $message")
+        assertFalse(KoinPluginConstants.AI_ASSIST_CTA_URL in message)
+    }
+
+    @Test
+    fun `flush emits trailing CTA when aiAssist is on and a diagnostic was reported`() {
+        val rec = Recorder()
+        KoinPluginLogger.init(rec, userLogs = false, debugLogs = false, aiAssist = true)
+        KoinPluginLogger.report(KoinDiagnostic.MissingBinding("T", null, "D", "p", "M", null))
+        KoinPluginLogger.report(KoinDiagnostic.MissingBinding("U", null, "D2", "p", "M", null))
+        KoinPluginLogger.flushAiAssistCta()
+
+        // 2 diagnostics + 1 trailing CTA, in order.
+        assertEquals(3, rec.reports.size)
+        val cta = rec.reports.last()
+        assertEquals(CompilerMessageSeverity.ERROR, cta.severity)
+        assertTrue("Fix with AI" in cta.message, "CTA missing: ${cta.message}")
+        assertTrue(KoinPluginConstants.AI_ASSIST_CTA_URL in cta.message)
+    }
+
+    @Test
+    fun `flush emits CTA at warning severity when only warnings were reported`() {
+        val rec = Recorder()
+        KoinPluginLogger.init(rec, userLogs = false, debugLogs = false, aiAssist = true)
+        KoinPluginLogger.report(KoinDiagnostic.MissingPropertyValue("k", "D", "M"))
+        KoinPluginLogger.flushAiAssistCta()
+
+        val cta = rec.reports.last()
+        assertEquals(CompilerMessageSeverity.WARNING, cta.severity)
+        assertTrue("Fix with AI" in cta.message)
+    }
+
+    @Test
+    fun `flush is a no-op when no diagnostic was reported`() {
+        val rec = Recorder()
+        KoinPluginLogger.init(rec, userLogs = false, debugLogs = false, aiAssist = true)
+        KoinPluginLogger.flushAiAssistCta()
+
+        assertTrue(rec.reports.isEmpty(), "CTA emitted with no preceding diagnostic: ${rec.reports}")
+    }
+
+    @Test
+    fun `flush is a no-op when aiAssist is disabled even if diagnostics fired`() {
+        val rec = Recorder()
+        KoinPluginLogger.init(rec, userLogs = false, debugLogs = false, aiAssist = false)
+        KoinPluginLogger.report(KoinDiagnostic.MissingBinding("T", null, "D", "p", "M", null))
+        KoinPluginLogger.flushAiAssistCta()
+
+        assertEquals(1, rec.reports.size, "Expected only the original diagnostic, not a CTA")
+        val message = rec.reports.single().message
+        assertFalse("Fix with AI" in message)
+        assertFalse(KoinPluginConstants.AI_ASSIST_CTA_URL in message)
+    }
+
+    @Test
+    fun `logger attaches source location when provided`() {
+        val rec = Recorder()
+        KoinPluginLogger.init(rec, userLogs = false, debugLogs = false, aiAssist = false)
+        KoinPluginLogger.report(
+            KoinDiagnostic.MissingCallSite(type = "T", callFn = "get"),
+            filePath = "/abs/path/App.kt", line = 14, column = 5,
+        )
+
+        val location = rec.reports.single().location
+        assertEquals("/abs/path/App.kt", location?.path)
+        assertEquals(14, location?.line)
+        assertEquals(5, location?.column)
+    }
+
+    @Test
+    fun `logger omits location when no file path given`() {
+        val rec = Recorder()
+        KoinPluginLogger.init(rec, userLogs = false, debugLogs = false, aiAssist = false)
+        KoinPluginLogger.report(KoinDiagnostic.MissingBinding("T", null, "D", "p", "M", null))
+
+        assertNull(rec.reports.single().location)
+    }
+
+    @Test
+    fun `CTA URL matches doc redirect contract`() {
+        // The plugin emits this URL once per build (trailing CTA) when aiAssist is on.
+        // The redirect at kotzilla.io/koin-mcp must always exist; do not change without coordinating.
+        assertEquals("https://kotzilla.io/koin-mcp", KoinPluginConstants.AI_ASSIST_CTA_URL)
+    }
+}

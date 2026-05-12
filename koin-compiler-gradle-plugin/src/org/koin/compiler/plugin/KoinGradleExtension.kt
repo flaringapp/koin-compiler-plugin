@@ -57,4 +57,13 @@ open class KoinGradleExtension(objectFactory: ObjectFactory) {
      * Set to false to disable validation (e.g., when dependencies are provided by external modules).
      */
     val compileSafety: Property<Boolean> = objectFactory.property(Boolean::class.java).convention(true)
+
+    /**
+     * Append a single AI-assist hint at the end of compilation if any Koin diagnostic fires (default: true).
+     * Emitted once per build (not per error), pointing developers to the Kotzilla MCP Server,
+     * which can classify Koin errors and walk an AI coding assistant through the fix.
+     * Set to false to suppress the CTA.
+     * See: https://doc.kotzilla.io/docs/fixIssues/koinMcp
+     */
+    val aiAssist: Property<Boolean> = objectFactory.property(Boolean::class.java).convention(true)
 }

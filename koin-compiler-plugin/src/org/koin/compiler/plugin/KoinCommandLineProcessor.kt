@@ -16,6 +16,7 @@ object KoinConfigurationKeys {
     val UNSAFE_DSL_CHECKS: CompilerConfigurationKey<Boolean> = CompilerConfigurationKey.create("koin.unsafeDslChecks")
     val SKIP_DEFAULT_VALUES: CompilerConfigurationKey<Boolean> = CompilerConfigurationKey.create("koin.skipDefaultValues")
     val COMPILE_SAFETY: CompilerConfigurationKey<Boolean> = CompilerConfigurationKey.create("koin.compileSafety")
+    val AI_ASSIST: CompilerConfigurationKey<Boolean> = CompilerConfigurationKey.create("koin.aiAssist")
 }
 
 @Suppress("unused") // Used via reflection.
@@ -27,6 +28,7 @@ class KoinCommandLineProcessor : CommandLineProcessor {
         const val OPTION_UNSAFE_DSL_CHECKS = KoinPluginConstants.OPTION_UNSAFE_DSL_CHECKS
         const val OPTION_SKIP_DEFAULT_VALUES = KoinPluginConstants.OPTION_SKIP_DEFAULT_VALUES
         const val OPTION_COMPILE_SAFETY = KoinPluginConstants.OPTION_COMPILE_SAFETY
+        const val OPTION_AI_ASSIST = KoinPluginConstants.OPTION_AI_ASSIST
     }
 
     override val pluginId: String = BuildConfig.KOTLIN_PLUGIN_ID
@@ -61,6 +63,12 @@ class KoinCommandLineProcessor : CommandLineProcessor {
             valueDescription = "<true|false>",
             description = "Enable compile-time dependency safety checks (validates all required dependencies are provided)",
             required = false
+        ),
+        CliOption(
+            optionName = OPTION_AI_ASSIST,
+            valueDescription = "<true|false>",
+            description = "Append an AI-assist hint pointing to Kotzilla MCP at the end of each Koin error message",
+            required = false
         )
     )
 
@@ -71,6 +79,7 @@ class KoinCommandLineProcessor : CommandLineProcessor {
             OPTION_UNSAFE_DSL_CHECKS -> configuration.put(KoinConfigurationKeys.UNSAFE_DSL_CHECKS, value.toBoolean())
             OPTION_SKIP_DEFAULT_VALUES -> configuration.put(KoinConfigurationKeys.SKIP_DEFAULT_VALUES, value.toBoolean())
             OPTION_COMPILE_SAFETY -> configuration.put(KoinConfigurationKeys.COMPILE_SAFETY, value.toBoolean())
+            OPTION_AI_ASSIST -> configuration.put(KoinConfigurationKeys.AI_ASSIST, value.toBoolean())
             else -> error("Unexpected config option: '${option.optionName}'")
         }
     }

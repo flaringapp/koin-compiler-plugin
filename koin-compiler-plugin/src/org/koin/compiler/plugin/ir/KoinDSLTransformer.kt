@@ -19,6 +19,7 @@ import org.jetbrains.kotlin.DeprecatedForRemovalCompilerApi
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.incremental.components.LookupTracker
 import org.koin.compiler.plugin.KoinAnnotationFqNames
+import org.koin.compiler.plugin.KoinDiagnostic
 import org.koin.compiler.plugin.KoinPluginLogger
 import org.jetbrains.kotlin.ir.expressions.IrGetField
 
@@ -743,11 +744,7 @@ class KoinDSLTransformer(
                 is IrConstructor -> (referencedFunction.parent as IrClass).name.asString()
                 is IrSimpleFunction -> referencedFunction.name.asString()
             }
-            KoinPluginLogger.error(
-                "create(::$targetName) must be the only instruction in the lambda. " +
-                "Other statements are not allowed when using create(). " +
-                "To disable this check, set koinCompiler { unsafeDslChecks = false } in your build.gradle.kts"
-            )
+            KoinPluginLogger.report(KoinDiagnostic.UnsafeDsl(target = targetName))
         }
     }
 

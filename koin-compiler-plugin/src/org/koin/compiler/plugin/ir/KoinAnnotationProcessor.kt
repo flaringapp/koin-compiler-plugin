@@ -33,6 +33,7 @@ import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.koin.compiler.plugin.KoinAnnotationFqNames
+import org.koin.compiler.plugin.KoinDiagnostic
 import org.koin.compiler.plugin.KoinPluginConstants
 import org.koin.compiler.plugin.KoinPluginLogger
 import org.koin.compiler.plugin.ProvidedTypeRegistry
@@ -1349,10 +1350,10 @@ class KoinAnnotationProcessor(
             p.name.asString() == "moduleDeclaration"
         }}?.owner
         if (moduleDslFunction == null) {
-            KoinPluginLogger.error(
-                "Cannot generate ${moduleClass.irClass.name}.module(): " +
-                "org.koin.dsl.module() not found on classpath. " +
-                "Please add io.insert-koin:koin-core to your dependencies."
+            KoinPluginLogger.report(
+                KoinDiagnostic.MissingCoreArtifact(
+                    moduleClassName = moduleClass.irClass.name.asString(),
+                )
             )
             // Generate error("Stub!") body to prevent backend crash
             generateErrorStubBody(function)
