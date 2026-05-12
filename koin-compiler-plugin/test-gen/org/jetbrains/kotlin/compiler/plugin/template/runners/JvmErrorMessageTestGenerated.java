@@ -21,6 +21,48 @@ public class JvmErrorMessageTestGenerated extends AbstractJvmErrorMessageTest {
   }
 
   @Test
+  @TestMetadata("call_site_param_arity_mismatch.kt")
+  public void testCall_site_param_arity_mismatch() {
+    runTest("koin-compiler-plugin/testData/diagnostics/call_site_param_arity_mismatch.kt");
+  }
+
+  @Test
+  @TestMetadata("call_site_param_dsl_missing_d006.kt")
+  public void testCall_site_param_dsl_missing_d006() {
+    runTest("koin-compiler-plugin/testData/diagnostics/call_site_param_dsl_missing_d006.kt");
+  }
+
+  @Test
+  @TestMetadata("call_site_param_missing_d006.kt")
+  public void testCall_site_param_missing_d006() {
+    runTest("koin-compiler-plugin/testData/diagnostics/call_site_param_missing_d006.kt");
+  }
+
+  @Test
+  @TestMetadata("call_site_param_no_injected_no_d006.kt")
+  public void testCall_site_param_no_injected_no_d006() {
+    runTest("koin-compiler-plugin/testData/diagnostics/call_site_param_no_injected_no_d006.kt");
+  }
+
+  @Test
+  @TestMetadata("call_site_param_nullable_ok.kt")
+  public void testCall_site_param_nullable_ok() {
+    runTest("koin-compiler-plugin/testData/diagnostics/call_site_param_nullable_ok.kt");
+  }
+
+  @Test
+  @TestMetadata("call_site_param_ok.kt")
+  public void testCall_site_param_ok() {
+    runTest("koin-compiler-plugin/testData/diagnostics/call_site_param_ok.kt");
+  }
+
+  @Test
+  @TestMetadata("call_site_param_type_mismatch.kt")
+  public void testCall_site_param_type_mismatch() {
+    runTest("koin-compiler-plugin/testData/diagnostics/call_site_param_type_mismatch.kt");
+  }
+
+  @Test
   @TestMetadata("circular_dependency_broken_by_lazy.kt")
   public void testCircular_dependency_broken_by_lazy() {
     runTest("koin-compiler-plugin/testData/diagnostics/circular_dependency_broken_by_lazy.kt");

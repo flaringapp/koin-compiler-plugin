@@ -63,6 +63,24 @@ data class Requirement(
 }
 
 /**
+ * Description of a single `@InjectedParam` slot on a definition, used for call-site
+ * `parametersOf(...)` validation (KOIN-D005/D006).
+ *
+ * Captured locally at definition collection AND reconstructed cross-module from the
+ * `injectedparams_*` hint function signature — both produce the same shape.
+ *
+ * @property name the parameter name as declared on the constructor (used in diagnostic messages)
+ * @property typeFqName the parameter's classifier FqName (raw; generics are erased to match
+ *           Koin's runtime resolution model, see [HintTypeErasure])
+ * @property isNullable whether the parameter type is marked nullable
+ */
+data class InjectedParamSlot(
+    val name: String,
+    val typeFqName: String,
+    val isNullable: Boolean,
+)
+
+/**
  * Registry of all provided bindings, with per-module validation.
  *
  * Collects all definitions during annotation processing Phase 1,
@@ -162,6 +180,94 @@ class BindingRegistry {
             val rotated = open.drop(minIdx) + open.take(minIdx)
             return rotated.joinToString("→")
         }
+
+        // ────────────────────────────────────────────────────────────────────────────
+        // @InjectedParam call-site shape validation (KOIN-D005)
+        // ────────────────────────────────────────────────────────────────────────────
+
+        /**
+         * A single positional argument captured from `parametersOf(arg0, arg1, …)` at a call site.
+         * `typeFqName == null` means the IR could not be classified (lambda was non-trivial or
+         * the arg classifier was missing) — caller should treat the whole call site as ambiguous
+         * and SKIP validation rather than reporting a spurious mismatch.
+         */
+        data class ParametersOfArg(
+            val typeFqName: String?,
+            val isNullable: Boolean,
+        )
+
+        /** Result of [validateInjectedParamShape]. */
+        sealed class ShapeCheck {
+            object Ok : ShapeCheck()
+
+            /** parametersOf args couldn't be classified — call site is ambiguous, skip reporting. */
+            object Ambiguous : ShapeCheck()
+
+            data class ArityMismatch(val expected: Int, val actual: Int) : ShapeCheck()
+
+            /** First positional index that doesn't type-match; [expected]/[actual] are the slot lists. */
+            data class TypeMismatch(
+                val index: Int,
+                val expectedSlot: InjectedParamSlot,
+                val actualArg: ParametersOfArg,
+            ) : ShapeCheck()
+        }
+
+        /**
+         * Validate a `parametersOf(...)` shape against the target definition's `@InjectedParam` slots.
+         *
+         * Rules (intentionally strict to minimise false positives — see plan for KOIN-D005):
+         *  - Arity must match exactly. Extra args and missing args are both ERROR.
+         *  - Type match: raw FqName equality. Generics are erased (matches Koin runtime + the hint
+         *    type-erasure convention used everywhere else in the plugin).
+         *  - Nullability: a `null`-typed arg (typeFqName=null with isNullable=true) is always valid;
+         *    a non-null arg into a nullable slot is allowed; a nullable arg into a non-null slot
+         *    is rejected as a type mismatch.
+         *  - Wildcards: an arg whose `typeFqName == null && isNullable == false` means
+         *    "couldn't classify" — the whole call is treated as [ShapeCheck.Ambiguous] and skipped.
+         *
+         * Subtype-aware matching (e.g. `parametersOf(SubFoo())` against a `Foo` slot) is a planned
+         * follow-up — pure-data shape check has no view of subtype relations.
+         */
+        fun validateInjectedParamShape(
+            slots: List<InjectedParamSlot>,
+            args: List<ParametersOfArg>,
+        ): ShapeCheck {
+            // If any arg is "couldn't classify" we don't have enough info to compare — skip.
+            if (args.any { it.typeFqName == null && !it.isNullable }) return ShapeCheck.Ambiguous
+
+            if (args.size != slots.size) return ShapeCheck.ArityMismatch(slots.size, args.size)
+
+            for (i in slots.indices) {
+                val slot = slots[i]
+                val arg = args[i]
+                // null literal arg: only valid into nullable slot
+                if (arg.typeFqName == null && arg.isNullable) {
+                    if (!slot.isNullable) return ShapeCheck.TypeMismatch(i, slot, arg)
+                    continue
+                }
+                // Type names must match
+                if (arg.typeFqName != slot.typeFqName) {
+                    return ShapeCheck.TypeMismatch(i, slot, arg)
+                }
+                // Non-null arg into non-null slot OK; nullable arg into non-null slot is an error.
+                if (arg.isNullable && !slot.isNullable) {
+                    return ShapeCheck.TypeMismatch(i, slot, arg)
+                }
+            }
+            return ShapeCheck.Ok
+        }
+
+        /** Pretty-render a slot list for diagnostic messages. */
+        fun renderSlots(slots: List<InjectedParamSlot>): List<String> =
+            slots.map { "${it.name}: ${it.typeFqName}${if (it.isNullable) "?" else ""}" }
+
+        /** Pretty-render an args list for diagnostic messages. */
+        fun renderArgs(args: List<ParametersOfArg>): List<String> =
+            args.map {
+                val type = it.typeFqName ?: "<unknown>"
+                "$type${if (it.isNullable) "?" else ""}"
+            }
     }
 
     /**

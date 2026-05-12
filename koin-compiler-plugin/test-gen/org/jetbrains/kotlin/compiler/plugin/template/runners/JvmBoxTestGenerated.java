@@ -287,6 +287,12 @@ public class JvmBoxTestGenerated extends AbstractJvmBoxTest {
     }
 
     @Test
+    @TestMetadata("dsl_injected_param_d006.kt")
+    public void testDsl_injected_param_d006() {
+      runTest("koin-compiler-plugin/testData/box/safety/dsl_injected_param_d006.kt");
+    }
+
+    @Test
     @TestMetadata("dsl_module_includes.kt")
     public void testDsl_module_includes() {
       runTest("koin-compiler-plugin/testData/box/safety/dsl_module_includes.kt");

@@ -98,6 +98,24 @@ object KoinPluginConstants {
     /** Prefix for DSL definition hints (e.g., dsl_single, dsl_factory). */
     const val DSL_DEFINITION_HINT_PREFIX = "dsl_"
 
+    /**
+     * Prefix for `@InjectedParam` shape hints (e.g., `injectedparams_com_example_A`).
+     * The hint function's signature carries the shape: each `@InjectedParam` slot becomes a
+     * value parameter with the slot's type and nullability. Consumers read arity/types/nullability
+     * directly from `IrFunction.valueParameters`. Used by KOIN-D005/D006 to validate
+     * `parametersOf(...)` at `get<T>()` / `inject<T>()` / `koinInject<T>()` call sites
+     * across module boundaries.
+     */
+    const val INJECTED_PARAMS_HINT_PREFIX = "injectedparams_"
+
+    /**
+     * Flatten an FqName (dots → underscores) into a Kotlin-identifier-safe segment usable as
+     * the suffix of an [INJECTED_PARAMS_HINT_PREFIX] hint function name. `$` (nested-class
+     * separator in some FqName renderings) also collapses to `_`.
+     */
+    fun flattenFqNameForHint(fqName: String): String =
+        fqName.replace('.', '_').replace('$', '_')
+
     /** Function name for qualifier annotation hint functions (e.g., qualifier). */
     const val QUALIFIER_HINT_NAME = "qualifier"
 

@@ -103,6 +103,75 @@ sealed class KoinDiagnostic(
         },
     )
 
+    /**
+     * KOIN-D005 — A `parametersOf(...)` call at a `get<T>()` / `inject<T>()` / `koinInject<T>()`
+     * site doesn't match the target definition's `@InjectedParam` slots (count or type).
+     *
+     * Fires only when the call site has a statically detectable `parametersOf(...)` call (single
+     * call at the top of the trailing lambda). Hand-written lambdas that resolve params by type
+     * (`{ params -> Foo(params.get<X>()) }`) are intentionally skipped to avoid false positives.
+     *
+     * Reason discriminates the two failure modes:
+     *  - [Reason.ARITY] — number of arguments differs from `@InjectedParam` slot count.
+     *  - [Reason.TYPE]  — positional type at index `i` doesn't match slot `i` (raw FqName
+     *    equality + nullability rule; subtype matching is a planned follow-up).
+     */
+    class MismatchedInjectedParams(
+        target: String,
+        expected: List<String>,
+        actual: List<String>,
+        reason: Reason,
+    ) : KoinDiagnostic(
+        code = "KOIN-D005",
+        severity = Severity.ERROR,
+        message = buildString {
+            append("Mismatched parametersOf(...) for ")
+            append(target)
+            append(": ")
+            append(
+                when (reason) {
+                    Reason.ARITY -> "expected ${expected.size} argument(s), got ${actual.size}"
+                    Reason.TYPE -> "type mismatch"
+                }
+            )
+            append("\n  Expected @InjectedParam slots: ")
+            append(if (expected.isEmpty()) "(none)" else expected.joinToString(", "))
+            append("\n  Got parametersOf arguments: ")
+            append(if (actual.isEmpty()) "(none)" else actual.joinToString(", "))
+        },
+    ) {
+        enum class Reason { ARITY, TYPE }
+    }
+
+    /**
+     * KOIN-D006 — A `get<T>()` / `inject<T>()` / `koinInject<T>()` call site is missing
+     * `parametersOf(...)` although the target definition requires `@InjectedParam` arguments.
+     *
+     * Fires only when the call site's trailing lambda doesn't statically contain `parametersOf`
+     * AND the target's def is known (locally or via the `injectedparams_*` cross-module hint).
+     */
+    class MissingInjectedParams(
+        target: String,
+        expected: List<String>,
+        callFn: String,
+    ) : KoinDiagnostic(
+        code = "KOIN-D006",
+        severity = Severity.ERROR,
+        message = buildString {
+            append(target)
+            append(" requires ")
+            append(expected.size)
+            append(" injected param(s) but ")
+            append(callFn)
+            append("<")
+            append(target.substringAfterLast('.'))
+            append(">() has no parametersOf(...) at the call site.")
+            append("\n  Expected @InjectedParam slots: ")
+            append(if (expected.isEmpty()) "(none)" else expected.joinToString(", "))
+            append("\n  Pass them via parametersOf(...) inside the trailing lambda.")
+        },
+    )
+
     /** KOIN-W001 — A DSL module is not loaded at `startKoin`, so its definitions are unreachable. */
     class UnreachableModule(
         module: String,

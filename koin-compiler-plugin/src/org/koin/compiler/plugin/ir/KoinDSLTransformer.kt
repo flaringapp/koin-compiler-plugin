@@ -349,7 +349,8 @@ class KoinDSLTransformer(
 
     /**
      * If the call is a Koin resolution function (koinViewModel<T>(), get<T>(), inject<T>(), etc.),
-     * collect it as a pending call-site validation.
+     * collect it as a pending call-site validation. Also captures any trailing
+     * `parametersOf(...)` lambda for KOIN-D005/D006 shape checks downstream.
      */
     private fun collectCallSiteIfResolutionFunction(expression: IrCall, callee: IrSimpleFunction) {
         val calleeFqName = callee.fqNameWhenAvailable?.asString() ?: return
@@ -369,17 +370,106 @@ class KoinDSLTransformer(
             file.fileEntry.getColumnNumber(expression.startOffset) + 1
         } else 0
 
+        // Locate the lambda passed for the Koin `parameters: (() -> ParametersHolder)?` slot,
+        // if any. Iterate value args because Koin overloads differ on positional layout
+        // (some take qualifier/scope first).
+        var lambdaArg: IrFunctionExpression? = null
+        for (i in 0 until expression.valueArgumentsCount) {
+            val arg = expression.getValueArgument(i) ?: continue
+            if (arg is IrFunctionExpression) {
+                lambdaArg = arg
+                break
+            }
+        }
+        val parametersOfArgs = lambdaArg?.let { extractParametersOfArgs(it) }
+
         _pendingCallSites.add(PendingCallSiteValidation(
             targetFqName = targetFqName,
             targetClass = targetClass,
             callFunctionName = calleeFqName.substringAfterLast("."),
             filePath = filePath,
             line = line,
-            column = column
+            column = column,
+            hasParametersLambda = lambdaArg != null,
+            parametersOfArgs = parametersOfArgs,
         ))
 
         // IC: call site file depends on the target class
         trackClassLookup(lookupTracker, currentFile, targetClass)
+    }
+
+    /**
+     * Extract `parametersOf(arg0, arg1, …)` args from the body of a trailing lambda. Returns:
+     *  - non-null list when the body is a single (possibly returned) `parametersOf(...)` call.
+     *    Each entry carries the arg's classifier FqName + nullability for shape comparison.
+     *  - `null` when the lambda body is anything else (non-trivial: `{ buildHolder() }`,
+     *    conditional, multi-statement) — treated as ambiguous downstream so we don't false-
+     *    positive KOIN-D005 on hand-written param builders.
+     *
+     * Strict by design — matches the `unsafeDslChecks` posture used elsewhere in the plugin.
+     */
+    private fun extractParametersOfArgs(
+        lambdaExpr: IrFunctionExpression,
+    ): List<BindingRegistry.Companion.ParametersOfArg>? {
+        val body = lambdaExpr.function.body as? IrBlockBody ?: return null
+        // The body must be exactly one statement that returns/yields a parametersOf call.
+        val stmt = body.statements.singleOrNull() ?: return null
+        val call: IrCall = when (stmt) {
+            is IrReturn -> stmt.value as? IrCall ?: return null
+            is IrCall -> stmt
+            else -> return null
+        }
+        val calleeFqName = call.symbol.owner.fqNameWhenAvailable?.asString() ?: return null
+        if (calleeFqName != KoinAnnotationFqNames.PARAMETERS_OF.asString()) return null
+
+        // parametersOf is `vararg values: Any?` — a single value-argument that's an IrVararg.
+        val args = mutableListOf<BindingRegistry.Companion.ParametersOfArg>()
+        if (call.valueArgumentsCount == 0) return args
+        val varargArg = call.getValueArgument(0)
+        when (varargArg) {
+            is IrVararg -> {
+                for (element in varargArg.elements) {
+                    args.add(classifyParametersOfArg(element))
+                }
+            }
+            null -> { /* parametersOf() with no args */ }
+            else -> {
+                // Single non-vararg arg (e.g., spread-only). Best-effort classify as-is.
+                args.add(classifyParametersOfArg(varargArg))
+            }
+        }
+        return args
+    }
+
+    /**
+     * Classify one positional `parametersOf` argument into a [BindingRegistry.Companion.ParametersOfArg]
+     * for shape comparison. Spread operators (`*list`) and unclassifiable expressions yield an
+     * ambiguous marker (`typeFqName=null, isNullable=false`) so the downstream validator skips
+     * the whole call rather than emit a false mismatch.
+     */
+    private fun classifyParametersOfArg(
+        element: org.jetbrains.kotlin.ir.IrElement,
+    ): BindingRegistry.Companion.ParametersOfArg {
+        // Spread element — can't classify its contents statically.
+        if (element is IrSpreadElement) {
+            return BindingRegistry.Companion.ParametersOfArg(typeFqName = null, isNullable = false)
+        }
+
+        val expr = element as? IrExpression
+            ?: return BindingRegistry.Companion.ParametersOfArg(typeFqName = null, isNullable = false)
+
+        // null literal
+        if (expr is IrConst && expr.value == null) {
+            return BindingRegistry.Companion.ParametersOfArg(typeFqName = null, isNullable = true)
+        }
+
+        val type = expr.type
+        val classifier = type.classifierOrNull?.owner as? IrClass
+        val fqName = classifier?.fqNameWhenAvailable?.asString()
+        return BindingRegistry.Companion.ParametersOfArg(
+            typeFqName = fqName,
+            isNullable = type.isMarkedNullable(),
+        )
     }
 
     /**
@@ -789,6 +879,21 @@ class KoinDSLTransformer(
 /**
  * A pending call-site validation collected during Phase 2.
  * Validated after Phase 3 when the assembled graph is available.
+ *
+ * Two-field encoding of `parametersOf(...)` state so KOIN-D005 and KOIN-D006 can fire
+ * independently:
+ *
+ * @property hasParametersLambda `true` iff the user passed a trailing lambda for the
+ *   `parameters: (() -> ParametersHolder)?` slot. Used by KOIN-D006: if a def needs
+ *   `@InjectedParam` but this is `false`, the user forgot `parametersOf(...)` entirely.
+ *
+ * @property parametersOfArgs Positional args captured when the trailing lambda contains a
+ *   single statically detectable `parametersOf(...)` call. `null` means either no lambda
+ *   was passed OR the lambda was non-trivial (`{ buildHolder() }`, `{ if (...) … }`, etc.) —
+ *   in the latter case shape checks (KOIN-D005) are skipped to avoid false positives.
+ *   Empty list means `parametersOf()` (no args). Items whose `typeFqName == null` and
+ *   `isNullable == false` represent args we couldn't classify; presence of any such arg
+ *   makes the whole call ambiguous downstream.
  */
 data class PendingCallSiteValidation(
     val targetFqName: String,
@@ -796,5 +901,7 @@ data class PendingCallSiteValidation(
     val callFunctionName: String,
     val filePath: String?,
     val line: Int,
-    val column: Int
+    val column: Int,
+    val hasParametersLambda: Boolean = false,
+    val parametersOfArgs: List<BindingRegistry.Companion.ParametersOfArg>? = null,
 )

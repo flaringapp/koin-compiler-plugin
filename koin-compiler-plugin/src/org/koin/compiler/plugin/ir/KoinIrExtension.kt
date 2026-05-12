@@ -49,6 +49,7 @@ class KoinIrExtension(
         // Instantiate extracted helper classes
         val dslHintGenerator = DslHintGenerator(pluginContext)
         val callSiteValidator = CallSiteValidator(pluginContext)
+        val injectedParamHints = InjectedParamHintGenerator(pluginContext, qualifierExtractor)
 
         // Phase 2.5: Generate DSL definition hints for cross-module discovery
         // Each DSL definition (single<T>, factory<T>, etc.) generates a hint function
@@ -56,6 +57,21 @@ class KoinIrExtension(
         if (dslDefinitions.isNotEmpty() && KoinPluginLogger.compileSafetyEnabled) {
             KoinPluginLogger.debug { "Phase 2.5: Generating ${dslDefinitions.size} DSL definition hints" }
             dslHintGenerator.generateDslDefinitionHints(moduleFragment, dslDefinitions)
+        }
+
+        // Phase 2.6: Generate `@InjectedParam` shape hints for cross-module call-site validation.
+        // Each definition with ≥ 1 `@InjectedParam` slot emits an `injectedparams_<flat-fqn>(...)`
+        // function whose signature mirrors the slot list. Consumer modules read those signatures
+        // to enforce parametersOf(...) shape at call sites (KOIN-D005/D006).
+        if (KoinPluginLogger.compileSafetyEnabled) {
+            val allDefs = mutableListOf<Definition>().apply {
+                addAll(dslDefinitions)
+                addAll(annotationProcessor.getAllKnownDefinitions())
+            }
+            if (allDefs.isNotEmpty()) {
+                KoinPluginLogger.debug { "Phase 2.6: Indexing @InjectedParam shape across ${allDefs.size} definition(s)" }
+                injectedParamHints.generateAndIndexHints(moduleFragment, allDefs)
+            }
         }
 
         // Phase 3: Transform startKoin<T> { } to inject modules()
@@ -86,7 +102,7 @@ class KoinIrExtension(
         // Unresolved call sites (when no full graph) generate call-site hints for deferred validation.
         if (safetyValidator != null && pendingCallSites.isNotEmpty()) {
             KoinPluginLogger.debug { "Phase 3.5: Validating ${pendingCallSites.size} call-site resolutions (graph types: ${safetyValidator.assembledGraphTypes.size})" }
-            callSiteValidator.validatePendingCallSites(moduleFragment, pendingCallSites, safetyValidator.assembledGraphTypes, dslDefinitions, annotationProcessor, dslHintGenerator)
+            callSiteValidator.validatePendingCallSites(moduleFragment, pendingCallSites, safetyValidator.assembledGraphTypes, dslDefinitions, annotationProcessor, dslHintGenerator, injectedParamHints)
         }
 
         // Phase 3.6: Validate call-site hints from dependency modules against known definitions

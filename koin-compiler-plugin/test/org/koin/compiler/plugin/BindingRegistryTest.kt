@@ -524,6 +524,140 @@ class BindingRegistryTest {
     }
 
     // ================================================================================
+    // @InjectedParam call-site shape validation (KOIN-D005, pure-data, no IR)
+    // ================================================================================
+
+    @Test
+    fun `validateInjectedParamShape Ok when arity and types match`() {
+        val slots = listOf(
+            InjectedParamSlot("id", "kotlin.String", isNullable = false),
+            InjectedParamSlot("count", "kotlin.Int", isNullable = false),
+        )
+        val args = listOf(
+            BindingRegistry.Companion.ParametersOfArg("kotlin.String", false),
+            BindingRegistry.Companion.ParametersOfArg("kotlin.Int", false),
+        )
+        assertEquals(BindingRegistry.Companion.ShapeCheck.Ok, BindingRegistry.validateInjectedParamShape(slots, args))
+    }
+
+    @Test
+    fun `validateInjectedParamShape ArityMismatch when actual is shorter`() {
+        val slots = listOf(InjectedParamSlot("id", "kotlin.String", false))
+        val args = emptyList<BindingRegistry.Companion.ParametersOfArg>()
+        val result = BindingRegistry.validateInjectedParamShape(slots, args)
+        assertTrue(result is BindingRegistry.Companion.ShapeCheck.ArityMismatch)
+        result as BindingRegistry.Companion.ShapeCheck.ArityMismatch
+        assertEquals(1, result.expected)
+        assertEquals(0, result.actual)
+    }
+
+    @Test
+    fun `validateInjectedParamShape ArityMismatch when actual is longer`() {
+        val slots = listOf(InjectedParamSlot("id", "kotlin.String", false))
+        val args = listOf(
+            BindingRegistry.Companion.ParametersOfArg("kotlin.String", false),
+            BindingRegistry.Companion.ParametersOfArg("kotlin.Int", false),
+        )
+        val result = BindingRegistry.validateInjectedParamShape(slots, args)
+        assertTrue(result is BindingRegistry.Companion.ShapeCheck.ArityMismatch)
+    }
+
+    @Test
+    fun `validateInjectedParamShape TypeMismatch when arg type differs`() {
+        // String slot, but caller passed an Int → TYPE mismatch at index 0.
+        val slots = listOf(InjectedParamSlot("id", "kotlin.String", false))
+        val args = listOf(BindingRegistry.Companion.ParametersOfArg("kotlin.Int", false))
+        val result = BindingRegistry.validateInjectedParamShape(slots, args)
+        assertTrue(result is BindingRegistry.Companion.ShapeCheck.TypeMismatch)
+        result as BindingRegistry.Companion.ShapeCheck.TypeMismatch
+        assertEquals(0, result.index)
+        assertEquals("kotlin.String", result.expectedSlot.typeFqName)
+        assertEquals("kotlin.Int", result.actualArg.typeFqName)
+    }
+
+    @Test
+    fun `validateInjectedParamShape Ok when non-null arg into nullable slot`() {
+        val slots = listOf(InjectedParamSlot("id", "kotlin.String", isNullable = true))
+        val args = listOf(BindingRegistry.Companion.ParametersOfArg("kotlin.String", false))
+        assertEquals(BindingRegistry.Companion.ShapeCheck.Ok, BindingRegistry.validateInjectedParamShape(slots, args))
+    }
+
+    @Test
+    fun `validateInjectedParamShape TypeMismatch when nullable arg into non-null slot`() {
+        val slots = listOf(InjectedParamSlot("id", "kotlin.String", isNullable = false))
+        val args = listOf(BindingRegistry.Companion.ParametersOfArg("kotlin.String", isNullable = true))
+        val result = BindingRegistry.validateInjectedParamShape(slots, args)
+        assertTrue(result is BindingRegistry.Companion.ShapeCheck.TypeMismatch)
+    }
+
+    @Test
+    fun `validateInjectedParamShape Ok when null literal into nullable slot`() {
+        val slots = listOf(InjectedParamSlot("id", "kotlin.String", isNullable = true))
+        // null literal: typeFqName=null, isNullable=true (per classifyParametersOfArg contract)
+        val args = listOf(BindingRegistry.Companion.ParametersOfArg(typeFqName = null, isNullable = true))
+        assertEquals(BindingRegistry.Companion.ShapeCheck.Ok, BindingRegistry.validateInjectedParamShape(slots, args))
+    }
+
+    @Test
+    fun `validateInjectedParamShape TypeMismatch when null literal into non-null slot`() {
+        val slots = listOf(InjectedParamSlot("id", "kotlin.String", isNullable = false))
+        val args = listOf(BindingRegistry.Companion.ParametersOfArg(typeFqName = null, isNullable = true))
+        val result = BindingRegistry.validateInjectedParamShape(slots, args)
+        assertTrue(result is BindingRegistry.Companion.ShapeCheck.TypeMismatch)
+    }
+
+    @Test
+    fun `validateInjectedParamShape Ambiguous when any arg unclassifiable`() {
+        // An arg with typeFqName=null and isNullable=false is the "couldn't classify" signal —
+        // we must not emit a false-positive mismatch.
+        val slots = listOf(InjectedParamSlot("id", "kotlin.String", isNullable = false))
+        val args = listOf(BindingRegistry.Companion.ParametersOfArg(typeFqName = null, isNullable = false))
+        assertEquals(BindingRegistry.Companion.ShapeCheck.Ambiguous, BindingRegistry.validateInjectedParamShape(slots, args))
+    }
+
+    @Test
+    fun `validateInjectedParamShape ArityMismatch with empty slots and non-empty args`() {
+        // Def has no @InjectedParam but caller passed parametersOf("x") — still wrong.
+        val slots = emptyList<InjectedParamSlot>()
+        val args = listOf(BindingRegistry.Companion.ParametersOfArg("kotlin.String", false))
+        val result = BindingRegistry.validateInjectedParamShape(slots, args)
+        assertTrue(result is BindingRegistry.Companion.ShapeCheck.ArityMismatch)
+        result as BindingRegistry.Companion.ShapeCheck.ArityMismatch
+        assertEquals(0, result.expected)
+        assertEquals(1, result.actual)
+    }
+
+    @Test
+    fun `validateInjectedParamShape Ok when both empty`() {
+        // Vacuously valid: no slots, no args.
+        val slots = emptyList<InjectedParamSlot>()
+        val args = emptyList<BindingRegistry.Companion.ParametersOfArg>()
+        assertEquals(BindingRegistry.Companion.ShapeCheck.Ok, BindingRegistry.validateInjectedParamShape(slots, args))
+    }
+
+    @Test
+    fun `renderSlots formats name and nullability`() {
+        val slots = listOf(
+            InjectedParamSlot("id", "kotlin.String", false),
+            InjectedParamSlot("count", "kotlin.Int", true),
+        )
+        val rendered = BindingRegistry.renderSlots(slots)
+        assertEquals("id: kotlin.String", rendered[0])
+        assertEquals("count: kotlin.Int?", rendered[1])
+    }
+
+    @Test
+    fun `renderArgs formats type and nullability with unknown fallback`() {
+        val args = listOf(
+            BindingRegistry.Companion.ParametersOfArg("kotlin.String", false),
+            BindingRegistry.Companion.ParametersOfArg(typeFqName = null, isNullable = true),
+        )
+        val rendered = BindingRegistry.renderArgs(args)
+        assertEquals("kotlin.String", rendered[0])
+        assertEquals("<unknown>?", rendered[1])
+    }
+
+    // ================================================================================
     // Helpers
     // ================================================================================
 

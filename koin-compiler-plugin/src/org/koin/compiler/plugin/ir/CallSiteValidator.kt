@@ -45,7 +45,8 @@ class CallSiteValidator(private val context: IrPluginContext) {
         assembledGraphTypes: Set<String>,
         dslDefinitions: List<Definition>,
         annotationProcessor: KoinAnnotationProcessor?,
-        dslHintGenerator: DslHintGenerator
+        dslHintGenerator: DslHintGenerator,
+        injectedParamHints: InjectedParamHintGenerator? = null,
     ) {
         val hasFullGraph = assembledGraphTypes.isNotEmpty()
 
@@ -97,6 +98,7 @@ class CallSiteValidator(private val context: IrPluginContext) {
             // Check assembled graph + DSL definitions + DSL hints
             if (callSite.targetFqName in allKnownTypes) {
                 KoinPluginLogger.debug { "A4: OK ${callSite.callFunctionName}<${callSite.targetFqName}>() — found in graph" }
+                if (injectedParamHints != null) validateInjectedParamShapeAtCallSite(callSite, injectedParamHints)
                 continue
             }
 
@@ -108,6 +110,7 @@ class CallSiteValidator(private val context: IrPluginContext) {
                 }
                 if (hasAnnotation) {
                     KoinPluginLogger.debug { "A4: OK ${callSite.callFunctionName}<${callSite.targetFqName}>() — has definition annotation" }
+                    if (injectedParamHints != null) validateInjectedParamShapeAtCallSite(callSite, injectedParamHints)
                     continue
                 }
             }
@@ -462,6 +465,68 @@ class CallSiteValidator(private val context: IrPluginContext) {
                     types = typeNames,
                 )
             )
+        }
+    }
+
+    /**
+     * KOIN-D005 / KOIN-D006 — validate `parametersOf(...)` shape at this call site against the
+     * target def's `@InjectedParam` slots (looked up locally first, then via the
+     * `injectedparams_*` cross-module hint).
+     *
+     * Decision matrix:
+     *   slots == null              → def doesn't need params (or unknown) → no report
+     *   !hasParametersLambda       → user forgot `parametersOf` entirely → KOIN-D006
+     *   parametersOfArgs == null   → trailing lambda was non-trivial → ambiguous, no report
+     *   shape != Ok                → KOIN-D005 with reason ARITY or TYPE
+     */
+    private fun validateInjectedParamShapeAtCallSite(
+        callSite: PendingCallSiteValidation,
+        hints: InjectedParamHintGenerator,
+    ) {
+        val slots = hints.getSlots(callSite.targetFqName) ?: return
+
+        if (!callSite.hasParametersLambda) {
+            KoinPluginLogger.report(
+                KoinDiagnostic.MissingInjectedParams(
+                    target = callSite.targetFqName,
+                    expected = BindingRegistry.renderSlots(slots),
+                    callFn = callSite.callFunctionName,
+                ),
+                callSite.filePath, callSite.line, callSite.column,
+            )
+            return
+        }
+
+        val args = callSite.parametersOfArgs
+            ?: return // ambiguous lambda (e.g. `{ buildHolder() }`) — skip
+
+        when (val check = BindingRegistry.validateInjectedParamShape(slots, args)) {
+            is BindingRegistry.Companion.ShapeCheck.Ok -> { /* validated */ }
+            is BindingRegistry.Companion.ShapeCheck.Ambiguous -> {
+                KoinPluginLogger.debug { "A4: skip shape check for ${callSite.targetFqName} (ambiguous parametersOf arg)" }
+            }
+            is BindingRegistry.Companion.ShapeCheck.ArityMismatch -> {
+                KoinPluginLogger.report(
+                    KoinDiagnostic.MismatchedInjectedParams(
+                        target = callSite.targetFqName,
+                        expected = BindingRegistry.renderSlots(slots),
+                        actual = BindingRegistry.renderArgs(args),
+                        reason = KoinDiagnostic.MismatchedInjectedParams.Reason.ARITY,
+                    ),
+                    callSite.filePath, callSite.line, callSite.column,
+                )
+            }
+            is BindingRegistry.Companion.ShapeCheck.TypeMismatch -> {
+                KoinPluginLogger.report(
+                    KoinDiagnostic.MismatchedInjectedParams(
+                        target = callSite.targetFqName,
+                        expected = BindingRegistry.renderSlots(slots),
+                        actual = BindingRegistry.renderArgs(args),
+                        reason = KoinDiagnostic.MismatchedInjectedParams.Reason.TYPE,
+                    ),
+                    callSite.filePath, callSite.line, callSite.column,
+                )
+            }
         }
     }
 }

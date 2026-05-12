@@ -55,6 +55,23 @@ class KoinDiagnosticTest {
         assertEquals("KOIN-D002", KoinDiagnostic.MissingCallSite("T", "get").code)
         assertEquals("KOIN-D003", KoinDiagnostic.MissingCallSiteDeferred("T").code)
         assertEquals("KOIN-D004", KoinDiagnostic.CircularDependency(listOf("A", "B", "A")).code)
+        assertEquals(
+            "KOIN-D005",
+            KoinDiagnostic.MismatchedInjectedParams(
+                target = "T",
+                expected = listOf("id: kotlin.String"),
+                actual = listOf("kotlin.Int"),
+                reason = KoinDiagnostic.MismatchedInjectedParams.Reason.TYPE,
+            ).code,
+        )
+        assertEquals(
+            "KOIN-D006",
+            KoinDiagnostic.MissingInjectedParams(
+                target = "T",
+                expected = listOf("id: kotlin.String"),
+                callFn = "inject",
+            ).code,
+        )
         assertEquals("KOIN-W001", KoinDiagnostic.UnreachableModule("m", listOf("T")).code)
         assertEquals("KOIN-A001", KoinDiagnostic.MissingViewModelArtifact("D").code)
         assertEquals("KOIN-A002", KoinDiagnostic.MissingWorkerArtifact("D").code)
@@ -70,8 +87,59 @@ class KoinDiagnosticTest {
         assertEquals(KoinDiagnostic.Severity.ERROR, KoinDiagnostic.MissingCoreArtifact("M").severity)
         assertEquals(KoinDiagnostic.Severity.ERROR, KoinDiagnostic.UnsafeDsl("T").severity)
         assertEquals(KoinDiagnostic.Severity.ERROR, KoinDiagnostic.CircularDependency(listOf("A", "B", "A")).severity)
+        assertEquals(
+            KoinDiagnostic.Severity.ERROR,
+            KoinDiagnostic.MismatchedInjectedParams(
+                target = "T",
+                expected = emptyList(),
+                actual = emptyList(),
+                reason = KoinDiagnostic.MismatchedInjectedParams.Reason.ARITY,
+            ).severity,
+        )
+        assertEquals(
+            KoinDiagnostic.Severity.ERROR,
+            KoinDiagnostic.MissingInjectedParams("T", emptyList(), "inject").severity,
+        )
         assertEquals(KoinDiagnostic.Severity.WARNING, KoinDiagnostic.MissingPropertyValue("k", "D", "M").severity)
         assertEquals(KoinDiagnostic.Severity.WARNING, KoinDiagnostic.MonitorNoSdk().severity)
+    }
+
+    @Test
+    fun `mismatched injected params renders both expected and actual lists`() {
+        val d = KoinDiagnostic.MismatchedInjectedParams(
+            target = "com.example.Greeter",
+            expected = listOf("name: kotlin.String", "count: kotlin.Int"),
+            actual = listOf("kotlin.Int", "kotlin.Int"),
+            reason = KoinDiagnostic.MismatchedInjectedParams.Reason.TYPE,
+        )
+        assertTrue("Mismatched parametersOf(...) for com.example.Greeter" in d.message)
+        assertTrue("type mismatch" in d.message)
+        assertTrue("name: kotlin.String, count: kotlin.Int" in d.message)
+        assertTrue("kotlin.Int, kotlin.Int" in d.message)
+    }
+
+    @Test
+    fun `mismatched injected params arity reason mentions counts`() {
+        val d = KoinDiagnostic.MismatchedInjectedParams(
+            target = "com.example.A",
+            expected = listOf("id: kotlin.String"),
+            actual = emptyList(),
+            reason = KoinDiagnostic.MismatchedInjectedParams.Reason.ARITY,
+        )
+        assertTrue("expected 1 argument(s), got 0" in d.message)
+    }
+
+    @Test
+    fun `missing injected params renders target and slot list`() {
+        val d = KoinDiagnostic.MissingInjectedParams(
+            target = "com.example.A",
+            expected = listOf("id: kotlin.String"),
+            callFn = "inject",
+        )
+        assertTrue("com.example.A requires 1 injected param(s)" in d.message)
+        assertTrue("inject<A>()" in d.message)
+        assertTrue("id: kotlin.String" in d.message)
+        assertTrue("parametersOf" in d.message)
     }
 
     @Test
