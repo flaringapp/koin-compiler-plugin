@@ -209,9 +209,6 @@ class DslHintGenerator(private val context: IrPluginContext) {
             // Mark as @Deprecated(HIDDEN) to prevent ObjC export crashes on Native targets
             function.addDeprecatedHiddenAnnotation(context)
 
-            // Build deterministic file name
-            val fileName = buildDslHintFileName(targetClassId, hintName)
-
             // Create synthetic FirFile for metadata
             val firModuleData = extractFirModuleData(targetClass)
                 ?: extractFirModuleDataFromModule(moduleFragment)
@@ -219,6 +216,12 @@ class DslHintGenerator(private val context: IrPluginContext) {
                 KoinPluginLogger.debug { "  WARN: No FIR module data for ${targetClass.name}, skipping DSL hint" }
                 continue
             }
+
+            // Build deterministic file name, prefixed with a Gradle-module-unique segment so
+            // two modules emitting hints for the same target type produce distinct class names
+            // (no dex merge collision). See KoinPluginConstants.OPTION_MODULE_ID.
+            val prefix = HintFilePrefix.of(firModuleData.name.asString())
+            val fileName = prefix + buildDslHintFileName(targetClassId, hintName)
 
             val firFile = buildFile {
                 moduleData = firModuleData

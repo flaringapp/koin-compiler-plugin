@@ -20,6 +20,7 @@ class KoinGradlePlugin : KotlinCompilerPluginSupportPlugin {
         const val OPTION_SKIP_DEFAULT_VALUES = "skipDefaultValues"
         const val OPTION_COMPILE_SAFETY = "compileSafety"
         const val OPTION_AI_ASSIST = "aiAssist"
+        const val OPTION_MODULE_ID = "moduleId"
     }
 
     private fun configureStrictSafety(
@@ -58,6 +59,11 @@ class KoinGradlePlugin : KotlinCompilerPluginSupportPlugin {
 
         configureStrictSafety(kotlinCompilation, extension)
 
+        // Use Gradle project.path (e.g. ":featureA:ui") as a stable, Gradle-module-unique
+        // moduleId so synthetic hint files in org.koin.plugin.hints get module-disambiguated
+        // and don't collide at dex merge. See KoinPluginConstants.OPTION_MODULE_ID.
+        val moduleId = project.path
+
         return project.provider {
             listOf(
                 SubpluginOption(OPTION_USER_LOGS, extension.userLogs.get().toString()),
@@ -65,7 +71,8 @@ class KoinGradlePlugin : KotlinCompilerPluginSupportPlugin {
                 SubpluginOption(OPTION_UNSAFE_DSL_CHECKS, extension.unsafeDslChecks.get().toString()),
                 SubpluginOption(OPTION_SKIP_DEFAULT_VALUES, extension.skipDefaultValues.get().toString()),
                 SubpluginOption(OPTION_COMPILE_SAFETY, extension.compileSafety.get().toString()),
-                SubpluginOption(OPTION_AI_ASSIST, extension.aiAssist.get().toString())
+                SubpluginOption(OPTION_AI_ASSIST, extension.aiAssist.get().toString()),
+                SubpluginOption(OPTION_MODULE_ID, moduleId)
             )
         }
     }

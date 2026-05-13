@@ -56,6 +56,15 @@ object KoinPluginLogger {
     var aiAssistEnabled: Boolean = false
         private set
 
+    /**
+     * Gradle-module-unique identifier (typically `project.path`, e.g. `:featureA:ui`) used as the
+     * leading segment of synthetic hint file names. Null when running outside Gradle (bare CLI,
+     * tests without the Gradle plugin); generators fall back to FIR module-data name in that case.
+     */
+    @Volatile
+    var moduleId: String? = null
+        private set
+
     /** LookupTracker from compiler configuration, for direct IC lookup recording. */
     @Volatile
     var lookupTracker: LookupTracker? = null
@@ -75,7 +84,7 @@ object KoinPluginLogger {
     /**
      * Initialize the logger with configuration from the compiler.
      */
-    fun init(collector: MessageCollector, userLogs: Boolean, debugLogs: Boolean, unsafeDslChecks: Boolean = true, skipDefaultValues: Boolean = true, compileSafety: Boolean = true, aiAssist: Boolean = true, lookupTracker: LookupTracker? = null) {
+    fun init(collector: MessageCollector, userLogs: Boolean, debugLogs: Boolean, unsafeDslChecks: Boolean = true, skipDefaultValues: Boolean = true, compileSafety: Boolean = true, aiAssist: Boolean = true, moduleId: String? = null, lookupTracker: LookupTracker? = null) {
         messageCollector = collector
         userLogsEnabled = userLogs
         debugLogsEnabled = debugLogs
@@ -83,6 +92,7 @@ object KoinPluginLogger {
         skipDefaultValuesEnabled = skipDefaultValues
         compileSafetyEnabled = compileSafety
         aiAssistEnabled = aiAssist
+        this.moduleId = moduleId?.takeIf { it.isNotBlank() }
         this.lookupTracker = lookupTracker
         highestDiagnosticSeverity.set(0)
     }
@@ -232,12 +242,13 @@ class KoinPluginComponentRegistrar: CompilerPluginRegistrar() {
         val skipDefaultValues = configuration.get(KoinConfigurationKeys.SKIP_DEFAULT_VALUES, true)
         val compileSafety = configuration.get(KoinConfigurationKeys.COMPILE_SAFETY, true)
         val aiAssist = configuration.get(KoinConfigurationKeys.AI_ASSIST, true)
+        val moduleId = configuration.get(KoinConfigurationKeys.MODULE_ID)
 
         // IC trackers for incremental compilation support
         val lookupTracker = configuration.get(CommonConfigurationKeys.LOOKUP_TRACKER)
 
         // Initialize the centralized logger (includes lookupTracker for FIR-level IC recording)
-        KoinPluginLogger.init(messageCollector, userLogs, debugLogs, unsafeDslChecks, skipDefaultValues, compileSafety, aiAssist, lookupTracker)
+        KoinPluginLogger.init(messageCollector, userLogs, debugLogs, unsafeDslChecks, skipDefaultValues, compileSafety, aiAssist, moduleId, lookupTracker)
         val expectActualTracker = configuration.get(
             CommonConfigurationKeys.EXPECT_ACTUAL_TRACKER,
             ExpectActualTracker.DoNothing

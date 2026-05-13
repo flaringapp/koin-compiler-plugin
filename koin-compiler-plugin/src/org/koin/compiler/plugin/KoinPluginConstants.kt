@@ -31,6 +31,14 @@ object KoinPluginConstants {
     const val OPTION_AI_ASSIST = "aiAssist"
 
     /**
+     * Option carrying a stable, Gradle-module-unique identifier (typically `project.path`).
+     * Used as the leading segment of synthetic hint file names so that two Gradle modules
+     * producing hints for the same target type don't collide at dex merge time.
+     * Falls back to the FIR module-data name when absent.
+     */
+    const val OPTION_MODULE_ID = "moduleId"
+
+    /**
      * URL printed in the AI-assist CTA.
      *
      * Short redirect to the canonical doc page at https://doc.kotzilla.io/docs/fixIssues/koinMcp.

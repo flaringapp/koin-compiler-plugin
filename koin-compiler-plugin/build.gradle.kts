@@ -81,6 +81,7 @@ tasks.test {
     if (project.hasProperty("update.testdata")) {
         systemProperty("overwrite.output", "true")
         systemProperty("update.testdata", "true")
+        systemProperty("kotlin.test.update.test.data", "true")
         environment("OVERWRITE_EXPECTED_OUTPUT", "true")
     }
 }

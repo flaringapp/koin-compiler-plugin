@@ -254,7 +254,10 @@ class InjectedParamHintGenerator(
             return
         }
 
-        val fileName = "${KoinPluginConstants.INJECTED_PARAMS_HINT_PREFIX}${flat}.kt"
+        // Module-disambiguating prefix so two Gradle modules emitting an InjectedParam hint
+        // for the same target type don't produce identical class names at dex merge time.
+        val modulePrefix = HintFilePrefix.of(firModuleData.name.asString())
+        val fileName = "${modulePrefix}${KoinPluginConstants.INJECTED_PARAMS_HINT_PREFIX}${flat}.kt"
         val firFile = buildFile {
             moduleData = firModuleData
             origin = FirDeclarationOrigin.Synthetic.PluginFile

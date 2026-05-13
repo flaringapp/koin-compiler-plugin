@@ -174,12 +174,11 @@ class CallSiteValidator(private val context: IrPluginContext) {
 
         // Module-specific prefix for hint filenames so two Gradle modules that both
         // koinInject<SameType>() don't produce identical class names — which otherwise
-        // trips the Android dex merger (issue #20). The FIR module data name reflects
-        // the Kotlin compilation unit and is unique per Gradle module variant.
-        val moduleIdForFilename = firModuleData.name.asString()
-            .removePrefix("<").removeSuffix(">")
-            .replace(Regex("[^A-Za-z0-9]"), "_")
-            .ifEmpty { "module" }
+        // trips the Android dex merger (issue #20). Composes the Gradle `project.path`
+        // (when available via koin.moduleId) with the FIR module-data name so KMP
+        // targets within the same Gradle module also stay distinct.
+        val modulePrefix = HintFilePrefix.of(firModuleData.name.asString())
+            .ifEmpty { "module__" }
 
         for (callSite in uniqueCallSites) {
             val targetClass = callSite.targetClass
@@ -234,7 +233,7 @@ class CallSiteValidator(private val context: IrPluginContext) {
             val sanitizedName = callSite.targetFqName.split(".")
                 .joinToString("") { it.replaceFirstChar { c -> c.uppercaseChar() } }
                 .replaceFirstChar { it.lowercaseChar() }
-            val fileName = "${moduleIdForFilename}_${sanitizedName}_callsite.kt"
+            val fileName = "${modulePrefix}${sanitizedName}_callsite.kt"
 
             val firFile = buildFile {
                 moduleData = firModuleData
