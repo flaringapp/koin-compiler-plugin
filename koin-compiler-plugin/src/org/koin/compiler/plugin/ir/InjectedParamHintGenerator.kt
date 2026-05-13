@@ -55,12 +55,24 @@ class InjectedParamHintGenerator(
     private val parameterAnalyzer = ParameterAnalyzer(qualifierExtractor)
     private val localSlots = mutableMapOf<String, List<InjectedParamSlot>>()
     private val crossModuleCache = mutableMapOf<String, List<InjectedParamSlot>?>()
+    // Targets with multiple definitions whose `@InjectedParam` shapes differ (or one defines
+    // them and another doesn't). The plugin can't pick which definition a call site resolves
+    // to without qualifier-aware resolution, so it skips D005/D006 for ambiguous targets.
+    private val ambiguousTargets = mutableSetOf<String>()
 
     /**
      * Walk [definitions], populate the local slot index, and emit one hint function per
      * definition that has at least one `@InjectedParam` slot. Definitions whose constructor
      * doesn't take `@InjectedParam` parameters produce no hint and no index entry —
      * `getSlots(fqn)` returns `null` for them, which is the "no params expected" signal.
+     *
+     * Ambiguity guard: if two definitions share the same return-type FqName but disagree on
+     * their `@InjectedParam` shape (different lists, or one has params and another doesn't),
+     * the target is marked ambiguous and excluded from the index — the plugin can't tell
+     * which definition a given call site resolves to without qualifier-aware analysis, so
+     * skipping validation is the only sound choice. Typical real-world trigger: multiple
+     * `@Singleton fun foo(...): Unit` distinguished only by `@Named` qualifier (a "launcher"
+     * pattern: `koin.get<Unit>(named("init")) { parametersOf(...) }`).
      */
     fun generateAndIndexHints(
         moduleFragment: IrModuleFragment,
@@ -68,17 +80,30 @@ class InjectedParamHintGenerator(
     ) {
         if (definitions.isEmpty()) return
 
+        // First pass: collect distinct slot shapes per target type so we can detect ambiguity.
+        val shapesByTarget = mutableMapOf<String, MutableSet<List<InjectedParamSlot>>>()
+        val resolvedDefs = mutableListOf<Triple<Definition, IrClass, List<InjectedParamSlot>>>()
         for (def in definitions) {
             val targetClass = def.returnTypeClass
             val targetFqName = targetClass.fqNameWhenAvailable?.asString() ?: continue
+            val slots = extractSlotsFromDefinition(def) ?: emptyList()
+            shapesByTarget.getOrPut(targetFqName) { mutableSetOf() }.add(slots)
+            if (slots.isNotEmpty()) resolvedDefs.add(Triple(def, targetClass, slots))
+        }
 
-            val slots = extractSlotsFromDefinition(def) ?: continue
-            if (slots.isEmpty()) continue
+        // Mark types with conflicting shapes as ambiguous.
+        for ((target, shapes) in shapesByTarget) {
+            if (shapes.size > 1) ambiguousTargets.add(target)
+        }
 
-            // Local index — used for same-compilation call-site validation
+        // Second pass: only index + emit hints for non-ambiguous targets.
+        for ((def, targetClass, slots) in resolvedDefs) {
+            val targetFqName = targetClass.fqNameWhenAvailable?.asString() ?: continue
+            if (targetFqName in ambiguousTargets) {
+                KoinPluginLogger.debug { "InjectedParam: ambiguous target $targetFqName (multiple definitions, different @InjectedParam shapes) — skipping index" }
+                continue
+            }
             localSlots.putIfAbsent(targetFqName, slots)
-
-            // Emit the hint function for cross-module discovery
             emitHintFunction(moduleFragment, def, targetClass, targetFqName, slots)
         }
 
@@ -100,6 +125,7 @@ class InjectedParamHintGenerator(
      *  - At the call site, both meanings translate to "don't fire D005/D006" — same outcome.
      */
     fun getSlots(targetFqName: String): List<InjectedParamSlot>? {
+        if (targetFqName in ambiguousTargets) return null
         localSlots[targetFqName]?.let { return it }
         if (crossModuleCache.containsKey(targetFqName)) return crossModuleCache[targetFqName]
         val discovered = discoverCrossModuleSlots(targetFqName)

@@ -2,6 +2,7 @@ package org.koin.compiler.plugin.ir
 
 import org.jetbrains.kotlin.backend.common.extensions.IrPluginContext
 import org.jetbrains.kotlin.backend.common.lower.DeclarationIrBuilder
+import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.UNDEFINED_OFFSET
 import org.jetbrains.kotlin.ir.builders.*
 import org.jetbrains.kotlin.ir.declarations.*
@@ -370,18 +371,22 @@ class KoinDSLTransformer(
             file.fileEntry.getColumnNumber(expression.startOffset) + 1
         } else 0
 
-        // Locate the lambda passed for the Koin `parameters: (() -> ParametersHolder)?` slot,
-        // if any. Iterate value args because Koin overloads differ on positional layout
-        // (some take qualifier/scope first).
-        var lambdaArg: IrFunctionExpression? = null
+        // Hunt for the `parametersOf(...)` call directly in the call-site arguments.
+        // We don't try to locate "the lambda" first because Compose's IR plugin wraps trailing
+        // lambdas passed to @Composable functions in arbitrary scaffolding (remember /
+        // sourceInformationMarker / local IrVariable indirections) that hides the user's lambda
+        // structurally — `koinViewModel<T> { parametersOf(...) }` becomes
+        // `IrBlock { ... val tmp = remember(..., { parametersOf(...) }); ... tmp }` after the
+        // Compose IR plugin runs. Walking the whole expression tree for `parametersOf` is
+        // robust to whatever shape Compose produces and falls back cleanly for non-Composable
+        // call sites (where the top-level arg is already an IrFunctionExpression).
+        var parametersOfCall: IrCall? = null
         for (i in 0 until expression.valueArgumentsCount) {
             val arg = expression.getValueArgument(i) ?: continue
-            if (arg is IrFunctionExpression) {
-                lambdaArg = arg
-                break
-            }
+            parametersOfCall = findParametersOfCall(arg) ?: continue
+            break
         }
-        val parametersOfArgs = lambdaArg?.let { extractParametersOfArgs(it) }
+        val parametersOfArgs = parametersOfCall?.let { extractParametersOfArgs(it) }
 
         _pendingCallSites.add(PendingCallSiteValidation(
             targetFqName = targetFqName,
@@ -390,7 +395,7 @@ class KoinDSLTransformer(
             filePath = filePath,
             line = line,
             column = column,
-            hasParametersLambda = lambdaArg != null,
+            hasParametersLambda = parametersOfCall != null,
             parametersOfArgs = parametersOfArgs,
         ))
 
@@ -408,20 +413,50 @@ class KoinDSLTransformer(
      *
      * Strict by design — matches the `unsafeDslChecks` posture used elsewhere in the plugin.
      */
-    private fun extractParametersOfArgs(
-        lambdaExpr: IrFunctionExpression,
-    ): List<BindingRegistry.Companion.ParametersOfArg>? {
-        val body = lambdaExpr.function.body as? IrBlockBody ?: return null
-        // The body must be exactly one statement that returns/yields a parametersOf call.
-        val stmt = body.statements.singleOrNull() ?: return null
-        val call: IrCall = when (stmt) {
-            is IrReturn -> stmt.value as? IrCall ?: return null
-            is IrCall -> stmt
-            else -> return null
+    /**
+     * Walk an arbitrary expression tree looking for the first `parametersOf(...)` call.
+     *
+     * Compose's IR plugin rewrites trailing lambdas passed to @Composable functions into
+     * `IrBlock { sourceInformationMarkerStart(...); val tmp = remember(..., { user-lambda });
+     * sourceInformationMarkerEnd(...); tmp }` — i.e., the user's lambda is buried inside an
+     * IrVariable initializer that's an IrCall whose arguments include another IrFunctionExpression
+     * wrapping the original body. Recursing for `parametersOf` cuts through that scaffolding
+     * regardless of the exact shape, and falls back cleanly for the non-Compose case (where the
+     * top-level arg is already an IrFunctionExpression).
+     */
+    private fun findParametersOfCall(node: IrElement?): IrCall? {
+        if (node == null) return null
+        if (node is IrCall) {
+            val fqName = node.symbol.owner.fqNameWhenAvailable?.asString()
+            if (fqName == KoinAnnotationFqNames.PARAMETERS_OF.asString()) return node
+            for (i in 0 until node.valueArgumentsCount) {
+                findParametersOfCall(node.getValueArgument(i))?.let { return it }
+            }
+            findParametersOfCall(node.dispatchReceiver)?.let { return it }
+            findParametersOfCall(node.extensionReceiver)?.let { return it }
         }
-        val calleeFqName = call.symbol.owner.fqNameWhenAvailable?.asString() ?: return null
-        if (calleeFqName != KoinAnnotationFqNames.PARAMETERS_OF.asString()) return null
+        if (node is IrFunctionExpression) {
+            return findParametersOfCall(node.function.body)
+        }
+        if (node is IrFunctionReference) {
+            return findParametersOfCall((node.symbol.owner as? IrSimpleFunction)?.body)
+        }
+        if (node is IrBlockBody) {
+            for (stmt in node.statements) findParametersOfCall(stmt)?.let { return it }
+        }
+        if (node is IrContainerExpression) {
+            for (stmt in node.statements) findParametersOfCall(stmt)?.let { return it }
+        }
+        if (node is IrReturn) return findParametersOfCall(node.value)
+        if (node is IrVariable) return findParametersOfCall(node.initializer)
+        if (node is IrTypeOperatorCall) return findParametersOfCall(node.argument)
+        if (node is IrSetValue) return findParametersOfCall(node.value)
+        return null
+    }
 
+    private fun extractParametersOfArgs(
+        call: IrCall,
+    ): List<BindingRegistry.Companion.ParametersOfArg>? {
         // parametersOf is `vararg values: Any?` — a single value-argument that's an IrVararg.
         val args = mutableListOf<BindingRegistry.Companion.ParametersOfArg>()
         if (call.valueArgumentsCount == 0) return args

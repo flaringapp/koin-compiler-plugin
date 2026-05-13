@@ -317,6 +317,12 @@ public class JvmBoxTestGenerated extends AbstractJvmBoxTest {
     }
 
     @Test
+    @TestMetadata("injected_param_unit_qualifier_collision.kt")
+    public void testInjected_param_unit_qualifier_collision() {
+      runTest("koin-compiler-plugin/testData/box/safety/injected_param_unit_qualifier_collision.kt");
+    }
+
+    @Test
     @TestMetadata("lazy_valid.kt")
     public void testLazy_valid() {
       runTest("koin-compiler-plugin/testData/box/safety/lazy_valid.kt");
