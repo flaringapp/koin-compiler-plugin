@@ -31,7 +31,8 @@ data class DefinitionClass(
     val definitionType: DefinitionType,
     val packageFqName: FqName,
     val bindings: List<IrClass>, // Interfaces/superclasses to bind (auto-detected + explicit)
-    val scopeClass: IrClass? = null, // Scope class from @Scope(MyScope::class)
+    val scopeClass: IrClass? = null, // Scope class from @Scope(MyScope::class) — typed scope
+    val scopeName: String? = null, // Scope qualifier from @Scope(name = "session") — string-named scope
     val scopeArchetype: ScopeArchetype? = null, // Scope archetype (@ViewModelScope, etc.)
     val createdAtStart: Boolean = false, // createdAtStart parameter from @Single/@Singleton
     val qualifier: QualifierValue? = null // Qualifier from @Named/@Qualifier (propagated from cross-module hints)
@@ -46,6 +47,7 @@ data class DefinitionFunction(
     val returnTypeClass: IrClass,
     val bindings: List<IrClass> = emptyList(),
     val scopeClass: IrClass? = null,
+    val scopeName: String? = null,
     val scopeArchetype: ScopeArchetype? = null,
     val createdAtStart: Boolean = false
 )
@@ -60,6 +62,7 @@ data class DefinitionTopLevelFunction(
     val returnTypeClass: IrClass,
     val bindings: List<IrClass> = emptyList(),
     val scopeClass: IrClass? = null,
+    val scopeName: String? = null,
     val scopeArchetype: ScopeArchetype? = null,
     val createdAtStart: Boolean = false
 )
@@ -72,7 +75,8 @@ sealed class Definition {
     abstract val definitionType: DefinitionType
     abstract val returnTypeClass: IrClass
     abstract val bindings: List<IrClass>
-    abstract val scopeClass: IrClass? // null = root scope
+    abstract val scopeClass: IrClass? // null = root scope (or scopeName/archetype) — typed scope
+    abstract val scopeName: String? // null = no string-named scope — `@Scope(name = "...")`
     abstract val scopeArchetype: ScopeArchetype? // null = no archetype
     abstract val createdAtStart: Boolean
 
@@ -81,6 +85,7 @@ sealed class Definition {
         override val definitionType: DefinitionType,
         override val bindings: List<IrClass>,
         override val scopeClass: IrClass? = null,
+        override val scopeName: String? = null,
         override val scopeArchetype: ScopeArchetype? = null,
         override val createdAtStart: Boolean = false,
         // Qualifier propagated from cross-module hint metadata. When non-null, overrides the
@@ -98,6 +103,7 @@ sealed class Definition {
         override val returnTypeClass: IrClass,
         override val bindings: List<IrClass> = emptyList(),
         override val scopeClass: IrClass? = null,
+        override val scopeName: String? = null,
         override val scopeArchetype: ScopeArchetype? = null,
         override val createdAtStart: Boolean = false
     ) : Definition()
@@ -108,6 +114,7 @@ sealed class Definition {
         override val returnTypeClass: IrClass,
         override val bindings: List<IrClass> = emptyList(),
         override val scopeClass: IrClass? = null,
+        override val scopeName: String? = null,
         override val scopeArchetype: ScopeArchetype? = null,
         override val createdAtStart: Boolean = false
     ) : Definition()
@@ -121,6 +128,7 @@ sealed class Definition {
         override val definitionType: DefinitionType,
         override val bindings: List<IrClass>,
         override val scopeClass: IrClass? = null,
+        override val scopeName: String? = null,
         override val scopeArchetype: ScopeArchetype? = null,
         override val createdAtStart: Boolean = false,
         val modulePropertyId: String? = null,
@@ -147,6 +155,7 @@ sealed class Definition {
         override val returnTypeClass: IrClass,
         override val bindings: List<IrClass> = emptyList(),
         override val scopeClass: IrClass? = null,
+        override val scopeName: String? = null,
         override val scopeArchetype: ScopeArchetype? = null,
         override val createdAtStart: Boolean = false,
         val qualifier: QualifierValue? = null

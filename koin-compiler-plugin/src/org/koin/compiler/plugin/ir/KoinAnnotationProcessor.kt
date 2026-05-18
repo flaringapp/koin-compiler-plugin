@@ -308,15 +308,16 @@ class KoinAnnotationProcessor(
                 detectBindings(declaration)
             }
             val scopeClass = getScopeClass(declaration)
+            val scopeName = getScopeName(declaration)
             val createdAtStart = getCreatedAtStart(declaration)
             // If scope archetype is present but no definition type, default to SCOPED
             val finalDefinitionType = definitionType ?: DefinitionType.SCOPED
             definitionClasses.add(DefinitionClass(
                 declaration, finalDefinitionType, packageFqName, bindings,
-                scopeClass, scopeArchetype, createdAtStart
+                scopeClass, scopeName, scopeArchetype, createdAtStart
             ))
 
-            logDefinitionDiscovery(declaration, finalDefinitionType, scopeArchetype, scopeClass, bindings, createdAtStart, "class ${declaration.name}")
+            logDefinitionDiscovery(declaration, finalDefinitionType, scopeArchetype, scopeClass, scopeName, bindings, createdAtStart, "class ${declaration.name}")
         }
     }
 
@@ -332,15 +333,16 @@ class KoinAnnotationProcessor(
         val packageFqName = (declaration.parent as? IrFile)?.packageFqName ?: FqName.ROOT
         val bindings = getExplicitBindings(declaration) ?: emptyList()
         val scopeClass = getScopeClass(declaration)
+        val scopeName = getScopeName(declaration)
         val scopeArchetype = getScopeArchetype(declaration)
         val createdAtStart = getCreatedAtStart(declaration)
 
         definitionTopLevelFunctions.add(DefinitionTopLevelFunction(
             declaration, definitionType, packageFqName, returnTypeClass,
-            bindings, scopeClass, scopeArchetype, createdAtStart
+            bindings, scopeClass, scopeName, scopeArchetype, createdAtStart
         ))
 
-        logDefinitionDiscovery(declaration, definitionType, scopeArchetype, scopeClass, bindings, createdAtStart, "function ${declaration.name}() -> ${returnTypeClass.name}")
+        logDefinitionDiscovery(declaration, definitionType, scopeArchetype, scopeClass, scopeName, bindings, createdAtStart, "function ${declaration.name}() -> ${returnTypeClass.name}")
     }
 
     /**
@@ -375,6 +377,7 @@ class KoinAnnotationProcessor(
         definitionType: DefinitionType,
         scopeArchetype: ScopeArchetype?,
         scopeClass: IrClass?,
+        scopeName: String?,
         bindings: List<IrClass>,
         createdAtStart: Boolean,
         targetName: String? = null
@@ -388,6 +391,9 @@ class KoinAnnotationProcessor(
         }
         if (scopeClass != null) {
             KoinPluginLogger.user { "  @Scope(${scopeClass.name}::class)" }
+        }
+        if (scopeName != null) {
+            KoinPluginLogger.user { "  @Scope(name = \"$scopeName\")" }
         }
         if (bindings.isNotEmpty()) {
             KoinPluginLogger.user { "  Binds: ${bindings.joinToString(", ") { it.name.asString() }}" }
@@ -407,7 +413,8 @@ class KoinAnnotationProcessor(
     }
 
     /**
-     * Get the scope class from @Scope(MyScope::class) annotation.
+     * Get the scope class from `@Scope(MyScope::class)` (typed scope).
+     * Returns null for the string-named variant `@Scope(name = "session")` — use [getScopeName] for that.
      * Works on both classes and functions.
      */
     private fun getScopeClass(declaration: IrDeclaration): IrClass? {
@@ -420,6 +427,29 @@ class KoinAnnotationProcessor(
             is IrClassReferenceImpl -> valueArg.classType.classifierOrNull?.owner as? IrClass
             else -> null
         }
+    }
+
+    /**
+     * Get the scope qualifier name from `@Scope(name = "session")` (string-named scope).
+     * Returns null when the annotation only has the typed `value` argument — use [getScopeClass] for that.
+     *
+     * Bug it fixes (KTZ-4039 / #34): without this, both `@Scope(name = ...)` variants were silently
+     * dropped — the typed-scope partition in `buildModuleBody` saw `scopeClass == null` and routed the
+     * definition through `buildScoped` on a `Module` receiver, where no such overload exists, producing
+     * no bean definition at all.
+     */
+    private fun getScopeName(declaration: IrDeclaration): String? {
+        val scopeAnnotation = declaration.annotations.firstOrNull { annotation ->
+            annotation.type.classFqName?.asString() == KoinAnnotationFqNames.SCOPE.asString()
+        } ?: return null
+
+        // @Scope is declared as `(value: KClass = Unit::class, name: String = "")` — name is positional
+        // arg index 1 when supplied. IrCall stores explicit named-args at their declared parameter
+        // index, so getValueArgument(1) returns the user's `name = "..."` whether they wrote it
+        // positionally or as a named argument.
+        val nameArg = scopeAnnotation.getValueArgument(1) as? org.jetbrains.kotlin.ir.expressions.IrConst
+        val value = nameArg?.value as? String
+        return value?.takeIf { it.isNotEmpty() }
     }
 
     private fun getDefinitionType(declaration: IrDeclaration): DefinitionType? {
@@ -557,9 +587,10 @@ class KoinAnnotationProcessor(
                 val returnTypeClass = (returnType.classifierOrNull?.owner as? IrClass) ?: return@mapNotNull null
                 val bindings = getExplicitBindings(function) ?: emptyList()
                 val scopeClass = getScopeClass(function)
+                val scopeName = getScopeName(function)
                 val scopeArchetype = getScopeArchetype(function)
                 val createdAtStart = getCreatedAtStart(function)
-                DefinitionFunction(function, defType, returnTypeClass, bindings, scopeClass, scopeArchetype, createdAtStart)
+                DefinitionFunction(function, defType, returnTypeClass, bindings, scopeClass, scopeName, scopeArchetype, createdAtStart)
             }
     }
 
@@ -1412,6 +1443,7 @@ class KoinAnnotationProcessor(
                 defClass.definitionType,
                 defClass.bindings,
                 defClass.scopeClass,
+                defClass.scopeName,
                 defClass.scopeArchetype,
                 defClass.createdAtStart,
                 defClass.qualifier
@@ -1426,7 +1458,8 @@ class KoinAnnotationProcessor(
                 defFunc.definitionType,
                 defFunc.returnTypeClass,
                 defFunc.bindings,
-                defFunc.scopeClass, // Scope class from @Scope annotation
+                defFunc.scopeClass, // Typed scope from @Scope(MyScope::class)
+                defFunc.scopeName, // String-named scope from @Scope(name = "...")
                 defFunc.scopeArchetype, // Scope archetype from @ViewModelScope, @ActivityScope, etc.
                 defFunc.createdAtStart
             ))
@@ -1441,6 +1474,7 @@ class KoinAnnotationProcessor(
                 defFunc.returnTypeClass,
                 defFunc.bindings,
                 defFunc.scopeClass,
+                defFunc.scopeName,
                 defFunc.scopeArchetype,
                 defFunc.createdAtStart
             )
@@ -1610,6 +1644,7 @@ class KoinAnnotationProcessor(
                     packageFqName = FqName(defPackage),
                     bindings = bindings.distinctBy { it.fqNameWhenAvailable },
                     scopeClass = scopeClass,
+                    scopeName = getScopeName(defClass),
                     scopeArchetype = getScopeArchetype(defClass),
                     createdAtStart = createdAtStart,
                     qualifier = qualifier
@@ -1766,6 +1801,7 @@ class KoinAnnotationProcessor(
                 defFunc.returnTypeClass,
                 bindings,
                 defFunc.scopeClass,
+                defFunc.scopeName,
                 defFunc.scopeArchetype,
                 defFunc.createdAtStart
             ))
@@ -1889,6 +1925,7 @@ class KoinAnnotationProcessor(
                 defClass.definitionType,
                 defClass.bindings,
                 defClass.scopeClass,
+                defClass.scopeName,
                 defClass.scopeArchetype,
                 defClass.createdAtStart,
                 defClass.qualifier
@@ -1969,6 +2006,7 @@ class KoinAnnotationProcessor(
                     definitionType,
                     bindings.distinctBy { it.fqNameWhenAvailable },
                     scopeClass,
+                    getScopeName(defClass),
                     getScopeArchetype(defClass),
                     createdAtStart,
                     classQualifier
@@ -2298,11 +2336,22 @@ class KoinAnnotationProcessor(
             }
         }
 
-        // Separate definitions by scope type
-        val rootDefinitions = definitions.filter { it.scopeClass == null && it.scopeArchetype == null }
-        val scopedDefinitions = definitions.filter { it.scopeClass != null }
-        val archetypeDefinitions = definitions.filter { it.scopeArchetype != null && it.scopeClass == null }
-        val scopeGroups = scopedDefinitions.groupBy { it.scopeClass!! }
+        // Separate definitions by scope type. A definition belongs to root iff none of the
+        // three scope-flavor fields is set; otherwise route into the matching group. This
+        // partition is the bug surface for KTZ-4039 / #34 — before scopeName existed, a
+        // `@Scope(name = "session") @Scoped` definition had `scopeClass == null` and fell
+        // through to `rootDefinitions`, where `buildScoped` on a `Module` receiver doesn't
+        // exist and the call was silently dropped.
+        val rootDefinitions = definitions.filter {
+            it.scopeClass == null && it.scopeName == null && it.scopeArchetype == null
+        }
+        val typedScopedDefinitions = definitions.filter { it.scopeClass != null }
+        val namedScopedDefinitions = definitions.filter { it.scopeName != null && it.scopeClass == null }
+        val archetypeDefinitions = definitions.filter {
+            it.scopeArchetype != null && it.scopeClass == null && it.scopeName == null
+        }
+        val scopeGroups = typedScopedDefinitions.groupBy { it.scopeClass!! }
+        val namedScopeGroups = namedScopedDefinitions.groupBy { it.scopeName!! }
         val archetypeGroups = archetypeDefinitions.groupBy { it.scopeArchetype!! }
 
         // Generate root-scope definitions
@@ -2319,9 +2368,17 @@ class KoinAnnotationProcessor(
             }
         }
 
-        // Generate scope<ScopeClass> { ... } blocks for scoped definitions
+        // Generate scope<ScopeClass> { ... } blocks for typed-scope definitions
         for ((scopeClass, scopeDefs) in scopeGroups) {
             val scopeBlock = buildScopeBlock(scopeClass, scopeDefs, moduleClass, moduleReceiverParam, lambdaFunction, lambdaBuilder, parentFunction)
+            if (scopeBlock != null) {
+                statements.add(scopeBlock)
+            }
+        }
+
+        // Generate scope(named("...")) { ... } blocks for string-named scope definitions (KTZ-4039)
+        for ((scopeName, scopeDefs) in namedScopeGroups) {
+            val scopeBlock = buildNamedScopeBlock(scopeName, scopeDefs, moduleClass, moduleReceiverParam, lambdaFunction, lambdaBuilder, parentFunction)
             if (scopeBlock != null) {
                 statements.add(scopeBlock)
             }
@@ -2385,6 +2442,29 @@ class KoinAnnotationProcessor(
     ): IrExpression? {
         return scopeBlockBuilder.buildScopeBlock(
             scopeClass = scopeClass,
+            moduleReceiver = moduleReceiver,
+            parentLambdaFunction = parentLambdaFunction,
+            builder = builder
+        ) { scopeDslReceiver, scopeLambdaFunction, scopeLambdaBuilder ->
+            buildScopedDefinitions(definitions, moduleClass, scopeDslReceiver, scopeLambdaFunction, scopeLambdaBuilder, parentFunction)
+        }
+    }
+
+    /**
+     * Build: scope(named("name")) { scoped(...) } — string-named scope variant for
+     * `@Scope(name = "...")`. KTZ-4039 / #34.
+     */
+    private fun buildNamedScopeBlock(
+        scopeName: String,
+        definitions: List<Definition>,
+        moduleClass: ModuleClass,
+        moduleReceiver: IrValueParameter,
+        parentLambdaFunction: IrFunction,
+        builder: DeclarationIrBuilder,
+        parentFunction: IrFunction
+    ): IrExpression? {
+        return scopeBlockBuilder.buildNamedScopeBlock(
+            scopeName = scopeName,
             moduleReceiver = moduleReceiver,
             parentLambdaFunction = parentLambdaFunction,
             builder = builder

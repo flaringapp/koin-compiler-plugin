@@ -463,6 +463,12 @@ public class JvmBoxTestGenerated extends AbstractJvmBoxTest {
     public void testScope_class() {
       runTest("koin-compiler-plugin/testData/box/scopes/scope_class.kt");
     }
+
+    @Test
+    @TestMetadata("scope_name.kt")
+    public void testScope_name() {
+      runTest("koin-compiler-plugin/testData/box/scopes/scope_name.kt");
+    }
   }
 
   @Nested
