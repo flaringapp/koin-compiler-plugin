@@ -172,6 +172,39 @@ sealed class KoinDiagnostic(
         },
     )
 
+    /**
+     * KOIN-D007 — A definition's binding type is (or extends) a `suspend` function type.
+     *
+     * Koin runtime does not currently support suspend function injection — the wiring would
+     * compile (the type-args defaulting in `KoinModuleFirGenerator.classLikeTypeWithDefaultArgs`
+     * keeps the IR valid for the hint) but the runtime semantics aren't in place: any attempt
+     * to resolve through the suspend supertype will misbehave, and the user only finds out at
+     * runtime. Blocking the compile is safer than letting silently-broken code ship.
+     *
+     * Fires for:
+     *  - `@Factory fun foo(...): MyUseCase` where `fun interface MyUseCase : suspend (P) -> R`
+     *  - any other `@Single` / `@Factory` / `@Scoped` whose return type or explicit binds
+     *    transitively references `kotlin.coroutines.SuspendFunctionN`
+     *
+     * Lifts once Koin core ships suspend DSL wiring (tracked: InsertKoinIO/koin-compiler-plugin#16).
+     */
+    class UnsupportedSuspendBinding(
+        target: String,
+        suspendType: String,
+    ) : KoinDiagnostic(
+        code = "KOIN-D007",
+        severity = Severity.ERROR,
+        message = buildString {
+            append("Unsupported binding: ")
+            append(target)
+            append(" extends ")
+            append(suspendType)
+            append("\n  Suspend function injection is not yet supported by Koin runtime.")
+            append("\n  Remove the @Single / @Factory / @Scoped registration, or refactor the binding type to not extend a suspend function.")
+            append("\n  Tracked at https://github.com/InsertKoinIO/koin-compiler-plugin/issues/16")
+        },
+    )
+
     /** KOIN-W001 — A DSL module is not loaded at `startKoin`, so its definitions are unreachable. */
     class UnreachableModule(
         module: String,

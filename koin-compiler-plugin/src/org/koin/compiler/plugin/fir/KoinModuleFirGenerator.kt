@@ -553,6 +553,11 @@ class KoinModuleFirGenerator(session: FirSession) : FirDeclarationGenerationExte
     /**
      * Detect auto-binding ClassIds from the return type's supertypes.
      * Filters out kotlin.Any and only includes interfaces and abstract classes.
+     *
+     * When a supertype is a `kotlin.coroutines.SuspendFunctionN`, emits KOIN-D007
+     * (blocks the build) and excludes that supertype from the returned bindings —
+     * suspend function injection isn't supported by Koin runtime yet, and shipping
+     * a half-wired definition is worse than failing the compile.
      */
     private fun detectBindingClassIds(returnTypeClassId: ClassId): List<ClassId> {
         val classSymbol = session.symbolProvider.getClassLikeSymbolByClassId(returnTypeClassId) ?: return emptyList()
@@ -564,6 +569,11 @@ class KoinModuleFirGenerator(session: FirSession) : FirDeclarationGenerationExte
                 val superClassId = superTypeRef.coneType.classId ?: continue
                 val superFqName = superClassId.asSingleFqName().asString()
                 if (superFqName == "kotlin.Any") continue
+
+                if (isSuspendFunctionClassId(superClassId)) {
+                    reportUnsupportedSuspendBinding(returnTypeClassId, superClassId)
+                    continue
+                }
 
                 // Check if the supertype is an interface or abstract class
                 val superSymbol = session.symbolProvider.getClassLikeSymbolByClassId(superClassId)
@@ -580,6 +590,36 @@ class KoinModuleFirGenerator(session: FirSession) : FirDeclarationGenerationExte
         }
         return bindings
     }
+
+    /**
+     * True if [classId] is one of `kotlin.coroutines.SuspendFunction0` … `SuspendFunction22`.
+     * Package check + name prefix is enough; no need to look up the symbol.
+     */
+    private fun isSuspendFunctionClassId(classId: ClassId): Boolean {
+        if (classId.packageFqName.asString() != "kotlin.coroutines") return false
+        val name = classId.shortClassName.asString()
+        if (!name.startsWith("SuspendFunction")) return false
+        val arity = name.removePrefix("SuspendFunction").toIntOrNull() ?: return false
+        return arity in 0..22
+    }
+
+    /**
+     * Emit KOIN-D007 for a definition whose binding type extends a suspend function type.
+     * Each (target, suspendType) pair is reported at most once per compilation to avoid
+     * duplicate noise when a definition is reached from multiple discovery passes.
+     */
+    private fun reportUnsupportedSuspendBinding(targetClassId: ClassId, suspendClassId: ClassId) {
+        val key = "${targetClassId.asSingleFqName()}|${suspendClassId.asSingleFqName()}"
+        if (!reportedSuspendBindings.add(key)) return
+        KoinPluginLogger.report(
+            org.koin.compiler.plugin.KoinDiagnostic.UnsupportedSuspendBinding(
+                target = targetClassId.asSingleFqName().asString(),
+                suspendType = suspendClassId.asSingleFqName().asString(),
+            )
+        )
+    }
+
+    private val reportedSuspendBindings: MutableSet<String> = mutableSetOf()
 
     /**
      * Extract the first string argument from a FIR annotation.

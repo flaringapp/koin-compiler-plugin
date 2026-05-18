@@ -99,6 +99,12 @@ public class JvmErrorMessageTestGenerated extends AbstractJvmErrorMessageTest {
   }
 
   @Test
+  @TestMetadata("factory_suspend_fun_interface_d007.kt")
+  public void testFactory_suspend_fun_interface_d007() {
+    runTest("koin-compiler-plugin/testData/diagnostics/factory_suspend_fun_interface_d007.kt");
+  }
+
+  @Test
   @TestMetadata("lazy_missing.kt")
   public void testLazy_missing() {
     runTest("koin-compiler-plugin/testData/diagnostics/lazy_missing.kt");
