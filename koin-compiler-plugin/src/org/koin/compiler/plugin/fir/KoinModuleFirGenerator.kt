@@ -36,6 +36,7 @@ import org.jetbrains.kotlin.fir.toFirResolvedTypeRef
 import org.jetbrains.kotlin.types.ConstantValueKind
 
 import org.jetbrains.kotlin.KtPsiSourceElement
+import com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.name.CallableId
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
@@ -81,6 +82,26 @@ import org.koin.compiler.plugin.KoinPluginConstants
  * The hint functions allow downstream modules to discover @Configuration modules from dependencies
  * by querying the `org.koin.plugin.hints` package via FIR's symbolProvider.
  */
+/**
+ * Defensive accessor for [KtPsiSourceElement.psi] — returns `null` if `getPsi()`
+ * isn't present at runtime instead of letting the [LinkageError] (typically
+ * [NoSuchMethodError]) bubble up and abort FIR file analysis.
+ *
+ * Background (issue #29 — kapt/Hilt coexistence): when the Koin compiler plugin is
+ * loaded into a build that also runs kapt (Hilt, Dagger, Room, etc.), kapt's stub
+ * generator can put a Kotlin compiler with a divergent `KtPsiSourceElement` ABI on
+ * the classpath. Our compiled bytecode resolves `psi` to a fixed JVM signature
+ * (`getPsi()` → `PsiElement`); when the runtime class doesn't expose that exact
+ * method, `NoSuchMethodError` fires inside file analysis and the user sees a
+ * `FileAnalysisException` they can't act on. Returning `null` here lets each call
+ * site fall back to the existing synthetic-file-name path.
+ */
+private fun KtPsiSourceElement.psiOrNull(): PsiElement? = try {
+    psi
+} catch (_: LinkageError) {
+    null
+}
+
 @OptIn(SymbolInternals::class, ExperimentalTopLevelDeclarationsGenerationApi::class, org.jetbrains.kotlin.fir.declarations.DirectDeclarationsAccess::class)
 class KoinModuleFirGenerator(session: FirSession) : FirDeclarationGenerationExtension(session) {
 
@@ -721,9 +742,12 @@ class KoinModuleFirGenerator(session: FirSession) : FirDeclarationGenerationExte
                 // Other types (null, metadata) - dependency classes from JARs
                 val containingFileName = when (source) {
                     is KtPsiSourceElement -> {
-                        val file = source.psi.containingFile
-                        log { "    KtPsiSourceElement: psi=${source.psi.javaClass.simpleName}, file=${file?.name}" }
-                        file?.name
+                        val psi = source.psiOrNull()
+                        val file = psi?.containingFile
+                        log { "    KtPsiSourceElement: psi=${psi?.javaClass?.simpleName}, file=${file?.name}" }
+                        // psi=null indicates LinkageError (kapt/Hilt coexistence) — fall back to
+                        // deterministic synthetic name so analysis continues.
+                        file?.name ?: syntheticFileName(classSymbol.classId, "Module")
                     }
                     else -> {
                         // Check if this is a real source element (KtRealSourceElementKind) vs synthetic
@@ -1066,7 +1090,7 @@ class KoinModuleFirGenerator(session: FirSession) : FirDeclarationGenerationExte
                     // Get containing file name
                     val source = functionSymbol.fir.source
                     val containingFileName = when (source) {
-                        is KtPsiSourceElement -> source.psi.containingFile?.name
+                        is KtPsiSourceElement -> source.psiOrNull()?.containingFile?.name
                         else -> {
                             val isRealSource = source?.kind?.toString()?.contains("RealSourceElementKind") == true
                             if (isRealSource) {
@@ -1254,7 +1278,7 @@ class KoinModuleFirGenerator(session: FirSession) : FirDeclarationGenerationExte
             try {
                 val source = classSymbol.fir.source
                 if (source is KtPsiSourceElement) {
-                    val ktFile = source.psi.containingFile as? org.jetbrains.kotlin.psi.KtFile ?: continue
+                    val ktFile = source.psiOrNull()?.containingFile as? org.jetbrains.kotlin.psi.KtFile ?: continue
                     val filePath = ktFile.virtualFilePath
                     if (filePath in seenFiles) continue
                     seenFiles.add(filePath)
@@ -1285,7 +1309,7 @@ class KoinModuleFirGenerator(session: FirSession) : FirDeclarationGenerationExte
                 for (symbol in potentialClasses.filterIsInstance<FirClassSymbol<*>>()) {
                     val source = symbol.fir.source
                     if (source is KtPsiSourceElement) {
-                        val ktFile = source.psi.containingFile as? org.jetbrains.kotlin.psi.KtFile ?: continue
+                        val ktFile = source.psiOrNull()?.containingFile as? org.jetbrains.kotlin.psi.KtFile ?: continue
                         val filePath = ktFile.virtualFilePath
                         if (filePath in seenFiles) continue
                         seenFiles.add(filePath)
@@ -1383,7 +1407,7 @@ class KoinModuleFirGenerator(session: FirSession) : FirDeclarationGenerationExte
 
         return when (source) {
             is KtPsiSourceElement -> {
-                source.psi.containingFile?.name
+                source.psiOrNull()?.containingFile?.name
             }
             else -> {
                 // Check if this is a real source element (KtRealSourceElementKind) vs synthetic
