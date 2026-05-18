@@ -105,6 +105,12 @@ public class JvmDiagnosticTestGenerated extends AbstractJvmDiagnosticTest {
   }
 
   @Test
+  @TestMetadata("koin_configuration_modules_a3.kt")
+  public void testKoin_configuration_modules_a3() {
+    runTest("koin-compiler-plugin/testData/diagnostics/koin_configuration_modules_a3.kt");
+  }
+
+  @Test
   @TestMetadata("lazy_missing.kt")
   public void testLazy_missing() {
     runTest("koin-compiler-plugin/testData/diagnostics/lazy_missing.kt");

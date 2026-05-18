@@ -139,9 +139,37 @@ class KoinStartTransformer(
         // Mark generic versions as entry points too
         hasKoinEntryPoint = true
 
-        // Verify this is the generic version (has type parameter)
-        // The implementation functions (startKoinWith, koinApplicationWith) have no type parameters
+        // Untyped variants — `startKoin { modules(A::class) }`, `koinApplication { modules(...) }`,
+        // and especially the Compose Composable-friendly `koinConfiguration { modules(...) }`
+        // (issue #38 / KTZ-4037) — don't have a `<T>` type parameter to drive `@KoinApplication`
+        // discovery, but they DO carry the module list directly inside the trailing lambda. Walk
+        // the lambda for `KoinApplication.modules(vararg KClass)` calls and route the result
+        // through A3 so the bare-config entry point gets the same full-graph validation as the
+        // typed entry point.
         if (callee.typeParameters.isEmpty()) {
+            val lambdaModuleClasses = collectModuleClassesFromLambda(expression)
+            if (lambdaModuleClasses.isNotEmpty() && safetyValidator != null && annotationProcessor != null) {
+                val startKoinFile = currentFile
+                for (moduleClass in lambdaModuleClasses) {
+                    trackClassLookup(lookupTracker, startKoinFile, moduleClass)
+                    linkDeclarationsForIC(expectActualTracker, startKoinFile, moduleClass)
+                }
+                val entryName = when {
+                    isStartKoin -> "startKoin { … }"
+                    isKoinApplication -> "koinApplication { … }"
+                    isKoinConfiguration -> "koinConfiguration { … }"
+                    isWithConfiguration -> "withConfiguration { … }"
+                    else -> "<unknown-entry>"
+                }
+                safetyValidator.validateFullGraph(
+                    entryName,
+                    lambdaModuleClasses,
+                    annotationProcessor.collectedModuleClasses,
+                    annotationProcessor::getDefinitionsForModule,
+                    annotationProcessor::getDefinitionsForDependencyModule,
+                    dslDefinitions
+                )
+            }
             return super.visitCall(expression)
         }
 
@@ -462,6 +490,65 @@ class KoinStartTransformer(
             is IrGetClass -> (expression.argument.type.classifierOrNull as? IrClassSymbol)?.owner
             else -> null
         }
+    }
+
+    /**
+     * Recursively walk a `startKoin { … }` / `koinApplication { … }` / `koinConfiguration { … }`
+     * trailing lambda and return the union of every `IrClass` reachable via
+     * `KoinApplication.modules(vararg KClass)` calls inside.
+     *
+     * The walk handles Compose's IR-plugin scaffolding the same way [KoinDSLTransformer.findParametersOfCall]
+     * does — Compose Composables wrap user lambdas in `sourceInformationMarkerStart` +
+     * `remember { ... }` + `IrVariable` initializers, so the literal `IrFunctionExpression`
+     * argument shape can't be assumed. Descending through `IrCall` / `IrFunctionExpression` /
+     * `IrFunctionReference` / `IrBlockBody` / `IrContainerExpression` / `IrReturn` /
+     * `IrVariable` / `IrTypeOperatorCall` / `IrSetValue` cuts through the scaffolding
+     * regardless of the exact shape.
+     *
+     * Used by the untyped-entry A3 path (KTZ-4037 / #38) — without a `<T>` type parameter we
+     * can't get modules from `@KoinApplication(modules = [...])`, but the user's `modules(...)`
+     * call inside the lambda gives us the same list at the IR level.
+     */
+    private fun collectModuleClassesFromLambda(call: IrCall): List<IrClass> {
+        val result = LinkedHashSet<IrClass>()
+
+        fun visit(node: IrElement?) {
+            if (node == null) return
+            if (node is IrCall) {
+                val nc = node.symbol.owner
+                val ncFq = nc.fqNameWhenAvailable?.asString()
+                val isModulesCall = ncFq == "org.koin.plugin.module.dsl.modules" &&
+                    nc.extensionReceiverParameter?.type?.classFqName?.asString() == "org.koin.core.KoinApplication" &&
+                    nc.valueParameters.size == 1 &&
+                    nc.valueParameters[0].varargElementType != null
+                if (isModulesCall) {
+                    val varargArg = node.getValueArgument(0) as? IrVararg
+                    varargArg?.elements?.forEach { element ->
+                        val cls = when (element) {
+                            is IrClassReference -> (element.classType.classifierOrNull as? IrClassSymbol)?.owner
+                            is IrExpression -> extractClassFromKClassExpression(element)
+                            else -> null
+                        }
+                        if (cls != null) result.add(cls)
+                    }
+                }
+                for (i in 0 until node.valueArgumentsCount) visit(node.getValueArgument(i))
+                visit(node.dispatchReceiver)
+                visit(node.extensionReceiver)
+                return
+            }
+            if (node is IrFunctionExpression) { visit(node.function.body); return }
+            if (node is IrFunctionReference) { visit((node.symbol.owner as? IrSimpleFunction)?.body); return }
+            if (node is IrBlockBody) { node.statements.forEach { visit(it) }; return }
+            if (node is IrContainerExpression) { node.statements.forEach { visit(it) }; return }
+            if (node is IrReturn) { visit(node.value); return }
+            if (node is IrVariable) { visit(node.initializer); return }
+            if (node is IrTypeOperatorCall) { visit(node.argument); return }
+            if (node is IrSetValue) { visit(node.value); return }
+        }
+
+        for (i in 0 until call.valueArgumentsCount) visit(call.getValueArgument(i))
+        return result.toList()
     }
 
     /**
