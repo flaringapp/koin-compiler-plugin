@@ -26,6 +26,9 @@ class MainActivity : ComponentActivity(), AndroidScopeComponent {
     private val networkMonitor: NetworkMonitor by inject()
     private val myInj  : MyInj by inject {parametersOf("42")}
 
+    private val vmParams : ParamsViewModel by viewModel { parametersOf("1", "2") }
+    private val vmParams2 : ParamsViewModel2 by viewModel { parametersOf("1", 2) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -38,5 +41,11 @@ class MainActivity : ComponentActivity(), AndroidScopeComponent {
             val isDarkTheme by viewModel.isDarkTheme.collectAsStateWithLifecycle()
             AppNavigation(isDarkTheme = isDarkTheme)
         }
+
+        println("vmParams:${vmParams.param1}:${vmParams.param2}, ${vmParams2.param1}:${vmParams2.param2}")
+        assert("1" == vmParams.param1)
+        assert("2" == vmParams.param2)
+        assert("1" == vmParams2.param1)
+        assert(2 == vmParams2.param2)
     }
 }
