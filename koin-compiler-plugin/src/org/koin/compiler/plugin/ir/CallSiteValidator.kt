@@ -50,8 +50,12 @@ class CallSiteValidator(private val context: IrPluginContext) {
     ) {
         val hasFullGraph = assembledGraphTypes.isNotEmpty()
 
-        // Discover DSL definitions from dependency hints (cross-module DSL discovery)
-        val dslHintTypes = if (!hasFullGraph) dslHintGenerator.discoverDslDefinitionTypes() else emptySet()
+        // Discover DSL definitions from dependency hints (cross-module DSL discovery).
+        // Always merge: A3's assembled graph only contains @Module classes' definitions, not
+        // DSL definitions loaded via `modules(dslModule)` from upstream modules. The hints
+        // generated at Phase 2.5 in upstream compiles cover that gap (e.g. typed
+        // `startKoin<MyApp>() { modules(dslModule) }` where dslModule lives in another source set).
+        val dslHintTypes = dslHintGenerator.discoverDslDefinitionTypes()
 
         // Build the set of all known provided types
         val allKnownTypes = buildSet {

@@ -103,7 +103,9 @@ Only runs in the entry-point module (the one that calls `startKoin { }`) to avoi
 
 ### Phase 3.5: Pending Call-Site Validation with Deferred Hint Generation
 
-After all definitions are collected and `startKoin` is processed, pending call sites are validated against the combined set of assembled graph types, DSL definitions, and DSL hints from dependencies.
+After all definitions are collected and `startKoin` is processed, pending call sites are validated against the combined set of assembled graph types, local DSL definitions, and cross-module DSL hints from dependencies.
+
+Cross-module DSL hints are merged into the call-site known-types set **unconditionally** — including when A3's full graph is already populated. The assembled graph from A3 only covers `@Module` classes' definitions; it doesn't reach DSL `module { … }` properties loaded via `modules(dslModule)` from upstream source sets. See [Mixing `@KoinApplication` with DSL modules](#mixing-koinapplication-with-dsl-modules) for the mixed-scenario case this closes.
 
 Unresolved call sites in modules without a full graph generate `callsite(required: T)` hint functions in `org.koin.plugin.hints`. These hints are synthetic IR functions that encode the required type as a parameter, allowing downstream modules to discover and validate them.
 
@@ -263,6 +265,39 @@ Within the explicit list, declaration order is preserved:
 If a module re-appears in both the explicit list and is also discovered via `@Configuration`, it is loaded once — at its **explicit position** — so the user's declaration order always controls override precedence.
 
 **Escape hatch for fine-grained ordering**: list all participating modules explicitly in `@KoinApplication(modules = [...])` in the desired order. This bypasses classpath-dependent discovery order for `@Configuration` modules.
+
+## Mixing `@KoinApplication` with DSL modules
+
+`@KoinApplication(modules = […])` only accepts `KClass` references to `@Module`-annotated classes — a DSL `module { … }` property has no class to reference, so it cannot live in that annotation list. The composition is one-way: annotations declare the aggregator on top, DSL modules can be added afterward in the trailing lambda of `startKoin<T> { … }`:
+
+```kotlin
+@Module @ComponentScan @Configuration @KoinApplication
+class MyApp
+
+@Singleton class A
+class B(val a: A)
+
+val dslModule = module {
+    single<B>()                    // DSL definition — no @Module class to reference
+}
+
+// In test / app entry:
+val koin = startKoin<MyApp> {
+    modules(dslModule)             // standard KoinApplication.modules(vararg Module)
+}.koin
+val b = koin.get<B>()              // resolves at runtime; must also resolve at compile time
+```
+
+**Coverage**:
+
+| Layer | What's checked | How |
+|-------|----------------|-----|
+| A3 (full graph) | `@Module`-discovered definitions only | Walks `@KoinApplication`-discovered + `@Configuration` modules |
+| A4 (call sites) | A3 graph **+ cross-module DSL hints** | Phase 3.5 unions `dsl_single`/`dsl_factory`/… hints from dependency JARs |
+
+A3 doesn't reach DSL module properties (they are values, not classes — the typed entry doesn't know which DSL modules you'll pass at the call site). A4 does, via the `dsl_<defType>` hints emitted in Phase 2.5 by the source set that owns the DSL module. That's enough to make `koin.get<B>()` resolve cleanly across the source-set boundary in the example above.
+
+**What this does not cover**: dependencies *inside* a DSL module's own definitions are not reverse-checked against the typed entry's annotation graph at A3 time. Those are still validated locally in the source set that declares the DSL module (Phase 3.1 / A4).
 
 ## Generic DSL Types
 
@@ -530,6 +565,17 @@ if (KoinPluginLogger.compileSafetyEnabled && moduleClasses.isNotEmpty() && annot
 `validateFullGraph()` collects ALL definitions from ALL modules via `annotationProcessor.getDefinitionsForModule()`, includes DSL definitions (`DslDef`) passed from Phase 2, and runs `BindingRegistry.validateModule()` on the union.
 
 The `annotationProcessor` reference is passed from `KoinIrExtension` (Phase 1 → Phase 3).
+
+## Cross-module DSL hint discovery
+
+`DslHintGenerator.discoverDslDefinitionTypes()` scans the classpath for `dsl_single`/`dsl_factory`/`dsl_scoped`/`dsl_viewModel`/`dsl_worker` hint functions in `org.koin.plugin.hints` and returns the FQNames of every provided type encoded across their parameters. This is what surfaces upstream DSL `module { single<X>() }` definitions to consumer modules.
+
+Two call sites in the aggregator consume the result:
+
+- **Phase 3.5** (`CallSiteValidator.validatePendingCallSites`) — unions the hint types into A4's known-types set, so `koin.get<X>()` resolves against DSL modules loaded via `modules(dslModule)` at the `startKoin<T> { … }` call (see [Mixing `@KoinApplication` with DSL modules](#mixing-koinapplication-with-dsl-modules)).
+- **Phase 3.6** (`CallSiteValidator.validateCallSiteHintsFromDependencies`) — same set used to validate `callsite(required: T)` hints from downstream modules.
+
+Both fire in the same compile, so `discoverDslDefinitionTypes()` is memoized via a `by lazy` on `DslHintGenerator` (instantiated once per `KoinIrExtension.generate()`). The underlying `IrPluginContext.referenceFunctions(CallableId)` scan runs once; subsequent calls return the cached `Set<String>`.
 
 ## Test Coverage
 

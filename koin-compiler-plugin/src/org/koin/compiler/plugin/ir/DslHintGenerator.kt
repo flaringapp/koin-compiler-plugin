@@ -310,8 +310,14 @@ class DslHintGenerator(private val context: IrPluginContext) {
      * Discover DSL definition types from hint functions in dependencies.
      * Queries dsl_single, dsl_factory, etc. hint functions and extracts
      * all provided types (concrete + bindings).
+     *
+     * Memoized: the underlying `referenceFunctions` scan is invariant within a single
+     * compile, and both `validatePendingCallSites` (A4) and `validateCallSiteHintsFromDependencies`
+     * (3.6) call this in the aggregator.
      */
-    fun discoverDslDefinitionTypes(): Set<String> {
+    fun discoverDslDefinitionTypes(): Set<String> = cachedDslDefinitionTypes
+
+    private val cachedDslDefinitionTypes: Set<String> by lazy {
         val types = mutableSetOf<String>()
         val hintsPackage = KoinModuleFirGenerator.HINTS_PACKAGE
 
@@ -332,7 +338,7 @@ class DslHintGenerator(private val context: IrPluginContext) {
             KoinPluginLogger.debug { "  Discovered ${types.size} DSL definition types from dependency hints" }
         }
 
-        return types
+        types
     }
 
     /**
