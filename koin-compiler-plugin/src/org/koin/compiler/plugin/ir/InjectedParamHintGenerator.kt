@@ -111,8 +111,15 @@ class InjectedParamHintGenerator(
                 KoinPluginLogger.debug { "InjectedParam: ambiguous target $targetFqName (multiple definitions, different @InjectedParam shapes) — skipping index" }
                 continue
             }
-            localSlots.putIfAbsent(targetFqName, slots)
-            emitHintFunction(moduleFragment, def, targetClass, targetFqName, slots)
+            // Emit the hint exactly once per target. Multiple definitions can share a
+            // target+shape (e.g. an annotation definition and a DSL definition for the
+            // same type); since they passed the ambiguity check they have identical
+            // shapes, so a single hint is correct. Emitting per-definition produces
+            // duplicate IR functions with identical signatures — tolerated on JVM but
+            // a hard KLIB serialization failure on Native/JS/Wasm (compiler#40, #44).
+            if (localSlots.putIfAbsent(targetFqName, slots) == null) {
+                emitHintFunction(moduleFragment, def, targetClass, targetFqName, slots)
+            }
         }
 
         if (localSlots.isNotEmpty()) {
@@ -292,12 +299,6 @@ class InjectedParamHintGenerator(
         // for the same target type don't produce identical class names at dex merge time.
         val modulePrefix = HintFilePrefix.of(firModuleData.name.asString())
         val fileName = "${modulePrefix}${KoinPluginConstants.INJECTED_PARAMS_HINT_PREFIX}${flat}.kt"
-        val firFile = buildFile {
-            moduleData = firModuleData
-            origin = FirDeclarationOrigin.Synthetic.PluginFile
-            packageDirective = buildPackageDirective { packageFqName = hintsPackage }
-            name = fileName
-        }
         // Anchor the synthetic hint file on a stable path from the current compile unit
         // (see issue #32). Priority: DSL registration site → target class source → sorted
         // first file in module. Mirrors [DslHintGenerator.generateDslDefinitionHints].
@@ -313,6 +314,16 @@ class InjectedParamHintGenerator(
             ?: moduleFragment.files.minByOrNull { it.fileEntry.name }?.fileEntry?.name
             ?: "/synthetic"
         val fakeNewPath = Path(basePath).parent.resolve(fileName)
+
+        val firFile = buildFile {
+            moduleData = firModuleData
+            origin = FirDeclarationOrigin.Synthetic.PluginFile
+            packageDirective = buildPackageDirective { packageFqName = hintsPackage }
+            name = fileName
+            // KLIB metadata serialization (Native/JS/Wasm) requires a resolvable io File
+            // per file; a null sourceFile fails the wasm/js serializer (KT-82395).
+            sourceFile = syntheticHintSourceFile(fakeNewPath.absolutePathString())
+        }
 
         val hintFile = IrFileImpl(
             fileEntry = NaiveSourceBasedFileEntryImpl(fakeNewPath.absolutePathString()),
