@@ -163,4 +163,10 @@ public class JvmErrorMessageTestGenerated extends AbstractJvmErrorMessageTest {
   public void testToplevel_function_without_component_scan() {
     runTest("koin-compiler-plugin/testData/diagnostics/toplevel_function_without_component_scan.kt");
   }
+
+  @Test
+  @TestMetadata("toplevel_function_without_component_scan_koin_application.kt")
+  public void testToplevel_function_without_component_scan_koin_application() {
+    runTest("koin-compiler-plugin/testData/diagnostics/toplevel_function_without_component_scan_koin_application.kt");
+  }
 }
